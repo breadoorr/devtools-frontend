@@ -238,6 +238,8 @@ grd_files_bundled_sources = [
   "front_end/Images/node-stack-icon.svg",
   "front_end/Images/nodeIcon.avif",
   "front_end/Images/open-externally.svg",
+  "front_end/Images/webstorm-go-to-ide-dark.svg",
+  "front_end/Images/webstorm-go-to-ide.svg",
   "front_end/Images/override.svg",
   "front_end/Images/palette.svg",
   "front_end/Images/pause-circle.svg",

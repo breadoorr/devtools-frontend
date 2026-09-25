@@ -53,6 +53,7 @@ devtools_ui_module("elements") {
     "LayersWidget.ts",
     "LayoutPane.ts",
     "MarkerDecorator.ts",
+    "OpenInIDE.ts",
     "MetricsSidebarPane.ts",
     "PlatformFontsWidget.ts",
     "PropertiesWidget.ts",

@@ -235,6 +235,8 @@ devtools_svg_sources = [
   "network-settings.svg",
   "node-stack-icon.svg",
   "open-externally.svg",
+  "webstorm-go-to-ide-dark.svg",
+  "webstorm-go-to-ide.svg",
   "override.svg",
   "palette.svg",
   "pause-circle.svg",

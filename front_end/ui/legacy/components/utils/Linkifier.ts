@@ -21,6 +21,8 @@ import {Directives, html, type LitTemplate, render, type TemplateResult} from '.
 import * as VisualLogging from '../../../visual_logging/visual_logging.js';
 import * as UI from '../../legacy.js';
 
+import * as OpenInIDE from './OpenInIDE.js';
+
 const {ref, ifDefined, classMap} = Directives;
 
 const UIStrings = {
@@ -873,6 +875,10 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
     LinkHandlerSettingUI.instance().update();
   }
 
+  static openInIDE(request: OpenInIDE.OpenInIDERequest): boolean {
+    return OpenInIDE.openInIDE(request);
+  }
+
   static isRegisteredLinkHandlerScheme(scheme: string): boolean {
     return linkHandlers.values().some(r => r.scheme === scheme);
   }
@@ -974,6 +980,12 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
         result.unshift(action);
       } else {
         result.push(action);
+      }
+    }
+    if (url) {
+      const openInIDEAction = OpenInIDE.createLinkAction(url, lineNumber, columnNumber ?? 0);
+      if (openInIDEAction) {
+        result.push(openInIDEAction);
       }
     }
     if (resource || info.url) {

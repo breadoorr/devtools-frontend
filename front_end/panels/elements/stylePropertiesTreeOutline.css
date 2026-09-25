@@ -108,6 +108,7 @@
   padding-left: 38px;
   clear: both;
   min-height: var(--sys-size-7);
+  position: relative;
 
   .webkit-css-property {
     margin-left: -38px; /* outdent the first line of the top-level properties to compensate for the "padding-left" shift in .tree-outline > li */
@@ -122,6 +123,20 @@
       margin-left: 0;
     }
   }
+}
+
+.tree-outline li > .webkit-css-property > .open-in-ide-button {
+  margin-inline-end: 2px;
+  vertical-align: top;
+  opacity: 0%;
+  pointer-events: none;
+}
+
+.tree-outline li:hover > .webkit-css-property > .open-in-ide-button,
+.tree-outline li:focus-within > .webkit-css-property > .open-in-ide-button,
+.tree-outline li > .webkit-css-property > .open-in-ide-button:focus-visible {
+  opacity: 100%;
+  pointer-events: auto;
 }
 
 ol:not(.tree-outline) {

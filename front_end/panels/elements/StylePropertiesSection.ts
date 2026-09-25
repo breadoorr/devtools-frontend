@@ -56,6 +56,7 @@ import * as PanelsCommon from '../common/common.js';
 import * as ElementsComponents from './components/components.js';
 import {formatSpecificitySummary, getSpecificityBreakdownLines} from './CSSSpecificityBreakdown.js';
 import {ElementsPanel} from './ElementsPanel.js';
+import * as OpenInIDE from './OpenInIDE.js';
 import stylePropertiesTreeOutlineStyles from './stylePropertiesTreeOutline.css.js';
 import {
   type Context,
@@ -346,6 +347,10 @@ export class StylePropertiesSection {
     this.element.prepend(this.selectorRefElement);
     this.updateRuleOrigin();
     this.titleElement.appendChild(selectorContainer);
+    const openInIDEButton = OpenInIDE.createOpenInIDEButton(this);
+    if (openInIDEButton) {
+      this.titleElement.prepend(openInIDEButton);
+    }
 
     if (this.navigable) {
       this.element.classList.add('navigable');
@@ -1816,6 +1821,12 @@ export class StylePropertiesSection {
       Host.InspectorFrontendHost.InspectorFrontendHostInstance.copyText(allDeclarationText);
     }, {jslogContext: 'copy-all-declarations'});
 
+    const selectorElement = target.closest('.simple-selector');
+    const selectorIndex = selectorElement ? this.elementToSelectorIndex.get(selectorElement) : undefined;
+    const linkElement = target.closest('.devtools-link') ?? undefined;
+    if (!target.closest('.webkit-css-property') && !linkElement) {
+      OpenInIDE.appendOpenInIDEContextMenuItem(contextMenu, this, {selectorIndex});
+    }
     void contextMenu.show();
   }
 
