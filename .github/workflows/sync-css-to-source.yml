@@ -1,0 +1,87 @@
+name: Sync and build CSS to Source DevTools
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: css-to-source-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FEATURE_BRANCH: css-to-source
+  UPSTREAM_REPOSITORY: ChromeDevTools/devtools-frontend
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout depot_tools
+        run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+
+      - name: Add depot_tools to PATH
+        run: echo "$(realpath depot_tools)" >> "$GITHUB_PATH"
+
+      - name: Checkout CSS to Source branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: devtools/devtools-frontend
+          ref: ${{ env.FEATURE_BRANCH }}
+
+      - name: Rebase onto current upstream
+        id: sync
+        working-directory: devtools/devtools-frontend
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch upstream main
+
+          before="$(git rev-parse HEAD)"
+          git rebase upstream/main
+          after="$(git rev-parse HEAD)"
+
+          if test "$before" = "$after"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create gclient config
+        if: steps.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: devtools
+        run: gclient config --unmanaged https://chromium.googlesource.com/devtools/devtools-frontend
+
+      - name: Sync dependencies
+        if: steps.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: devtools/devtools-frontend
+        run: gclient sync
+
+      - name: Build DevTools frontend
+        if: steps.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: devtools/devtools-frontend
+        run: npm run build
+
+      - name: Package browser assets
+        if: steps.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: devtools/devtools-frontend
+        run: node scripts/build/css_to_source/package_browser_assets.mjs out/Default out/css-to-source-devtools-frontend.zip
+
+      - name: Update CSS to Source branch
+        if: steps.sync.outputs.changed == 'true'
+        working-directory: devtools/devtools-frontend
+        run: git push --force-with-lease origin "HEAD:${FEATURE_BRANCH}"
+
+      - name: Upload browser assets
+        if: steps.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: css-to-source-devtools-frontend
+          path: devtools/devtools-frontend/out/css-to-source-devtools-frontend.zip
+          retention-days: 30
