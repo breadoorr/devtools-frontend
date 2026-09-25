@@ -42,6 +42,7 @@ import * as ElementsComponents from './components/components.js';
 import {cssRuleValidatorsMap, type Hint} from './CSSRuleValidator.js';
 import {CSSValueTraceView} from './CSSValueTraceView.js';
 import {ElementsPanel} from './ElementsPanel.js';
+import * as OpenInIDE from './OpenInIDE.js';
 import {
   BinOpRenderer,
   type CSSControlMap,
@@ -2956,6 +2957,7 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement impleme
       this.listItemElement.createChild('span', 'styles-name-value-separator').textContent = lineBreakValue ? ':' : ': ';
       this.listItemElement.appendChild(this.valueElement);
       this.listItemElement.createChild('span', 'styles-semicolon').textContent = ';';
+      this.appendOpenInIDEButton();
 
       this.#stylesContainer.trackForLazyRendering(this.listItemElement, () => {
         this.#lazyRender = false;
@@ -3148,6 +3150,7 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement impleme
         UI.UIUtils.createTextChild(this.listItemElement.createChild('span', 'styles-clipboard-only'), ' */');
       }
     }
+    this.appendOpenInIDEButton();
 
     if (this.property.parsedOk) {
       this.updateAuthoringHint();
@@ -3209,6 +3212,17 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement impleme
         that.startEditingName();
         event.consume(true);
       }
+    }
+  }
+
+  private appendOpenInIDEButton(): void {
+    if (this.newProperty) {
+      return;
+    }
+    const button = OpenInIDE.createOpenInIDEButton(
+        this.#parentSection, {property: this.property, propertyPart: 'name'});
+    if (button) {
+      this.nameElement?.prepend(button);
     }
   }
 
@@ -3413,6 +3427,8 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement impleme
     const revealCallback = this.navigateToSource.bind(this) as () => void;
     contextMenu.defaultSection().appendItem(
         i18nString(UIStrings.openInSourcesPanel), revealCallback, {jslogContext: 'reveal-in-sources-panel'});
+    OpenInIDE.appendOpenInIDEContextMenuItem(
+        contextMenu, this.#parentSection, {property: this.property, propertyPart: 'name'});
     void contextMenu.show();
   }
 
@@ -3463,6 +3479,12 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement impleme
     contextMenu.footerSection().appendItem(i18nString(UIStrings.viewComputedValue), () => {
       void this.viewComputedValue();
     }, {jslogContext: 'view-computed-value'});
+
+    if (this.valueElement && event.composedPath().includes(this.valueElement) &&
+        !(event.target as Element | null)?.closest('.devtools-link')) {
+      OpenInIDE.appendOpenInIDEContextMenuItem(
+          contextMenu, this.#parentSection, {property: this.property, propertyPart: 'value'});
+    }
 
     return contextMenu;
   }
