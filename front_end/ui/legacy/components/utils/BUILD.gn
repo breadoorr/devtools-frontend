@@ -20,6 +20,7 @@ devtools_ui_module("utils") {
     "ImagePreview.ts",
     "JSPresentationUtils.ts",
     "Linkifier.ts",
+    "OpenInIDE.ts",
     "Reload.ts",
     "TargetDetachedDialog.ts",
   ]
