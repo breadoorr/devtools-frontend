@@ -80,6 +80,20 @@
     white-space: normal;
   }
 
+  .styles-section-title > .open-in-ide-button {
+    margin-inline-end: 2px;
+    vertical-align: middle;
+    opacity: 0%;
+    pointer-events: none;
+  }
+
+  .styles-section-title:hover > .open-in-ide-button,
+  .styles-section-title:focus-within > .open-in-ide-button,
+  .styles-section-title > .open-in-ide-button:focus-visible {
+    opacity: 100%;
+    pointer-events: auto;
+  }
+
   .ancestor-rule-list devtools-css-query {
     display: block;
   }
