@@ -23,6 +23,59 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+const gnBinaryCache = new Map<string, string>();
+
+/**
+ * Resolves the GN binary checked out via DEPS under `buildtools/`.
+ * Invoking `gn` from PATH resolves to the depot_tools wrapper, which
+ * requires an initialized depot_tools (e.g. `python3_bin_reldir.txt`) and
+ * fails on bots where depot_tools has not been bootstrapped.
+ *
+ * The result is cached per root directory.
+ */
+export function getGnBinary(rootDir: string): string {
+  const key = path.resolve(rootDir);
+  const cached = gnBinaryCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const gnBinary = resolveGnBinary(key);
+  gnBinaryCache.set(key, gnBinary);
+  return gnBinary;
+}
+
+function resolveGnBinary(rootDir: string): string {
+  let platformDir: string;
+  let binaryName = 'gn';
+  switch (process.platform) {
+    case 'linux':
+      platformDir = 'linux64';
+      break;
+    case 'darwin':
+      platformDir = 'mac';
+      break;
+    case 'win32':
+      platformDir = 'win';
+      binaryName = 'gn.exe';
+      break;
+    default:
+      throw new Error(`Unsupported platform for GN binary: ${process.platform}`);
+  }
+  let currentDir = rootDir;
+  while (true) {
+    const gnPath = path.join(currentDir, 'buildtools', platformDir, binaryName);
+    if (fs.existsSync(gnPath)) {
+      return gnPath;
+    }
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+  throw new Error(`Could not find GN binary starting from ${rootDir}`);
+}
+
 export function compareAssignmentPriority(a: GnAstNode, b: GnAstNode): number {
   const getPriority = (node: GnAstNode): number => {
     const hasList = findFirstListNode(node.child?.[1]) !== undefined;
@@ -30,6 +83,35 @@ export function compareAssignmentPriority(a: GnAstNode, b: GnAstNode): number {
     return (hasList ? 2 : 0) + (isEquals ? 1 : 0);
   };
   return getPriority(b) - getPriority(a);
+}
+
+function isEmptyListAssignment(node: GnAstNode): boolean {
+  const rhs = node.child?.[1];
+  return rhs?.type === 'LIST' && (rhs.child?.length ?? 0) === 0;
+}
+
+/**
+ * Removes top-level `targetProperty` assignments within a target block whose value is an
+ * empty list literal (e.g. `deps = []` or `deps += []`).
+ *
+ * A `=` assignment is only removed when it is the sole remaining assignment to
+ * `targetProperty`, because subsequent `+=`/`-=` assignments require the variable to be defined.
+ */
+function removeEmptyTopLevelAssignments(block: GnAstNode, targetProperty: string): void {
+  if (!block.child) {
+    return;
+  }
+  block.child = block.child.filter(node => {
+    const isEmptyAppend = node.type === 'BINARY' && node.value === '+=' && node.child?.[0]?.value === targetProperty &&
+        isEmptyListAssignment(node);
+    return !isEmptyAppend;
+  });
+
+  const remainingAssigns = findAssignments(block.child, targetProperty);
+  if (remainingAssigns.length === 1 && remainingAssigns[0].value === '=' &&
+      isEmptyListAssignment(remainingAssigns[0])) {
+    block.child = block.child.filter(node => node !== remainingAssigns[0]);
+  }
 }
 
 export class GnBuildFile {
@@ -54,7 +136,7 @@ export class GnBuildFile {
     }
     try {
       const {stdout} = await execFileAsync(
-          'gn',
+          getGnBinary(rootDir),
           ['format', '--dump-tree=json', absPath],
           {
             encoding: 'utf-8',
@@ -153,11 +235,7 @@ export class GnBuildFile {
     }
 
     const currentDir = path.dirname(this.filePath);
-    const resolveDep = (dep: string) => GnLabel.resolveDeclaredDep(
-        unquoteFromGn(dep),
-        currentDir,
-        this.rootDir,
-    );
+    const resolveDep = (dep: string) => GnLabel.resolveDeclaredDep(unquoteFromGn(dep), currentDir, this.rootDir);
 
     const unusedDepsSet = new Set(options.unusedDeps.map(resolveDep));
     const targetProperty = options.targetProperty;
@@ -191,6 +269,10 @@ export class GnBuildFile {
       });
     }
 
+    if (modified && options.missingDeps.length === 0) {
+      removeEmptyTopLevelAssignments(block, targetProperty);
+    }
+
     // Append missing deps to a top-level target assignment.
     if (options.missingDeps.length > 0) {
       const topLevelDepsAssigns = findAssignments(
@@ -201,7 +283,9 @@ export class GnBuildFile {
       const topLevelAdditiveAssigns = topLevelDepsAssigns.filter(
           a => a.value === '=' || a.value === '+=',
       );
-      let targetAssign = [...topLevelAdditiveAssigns].sort(compareAssignmentPriority)[0];
+      let targetAssign = [...topLevelAdditiveAssigns].sort(
+          compareAssignmentPriority,
+          )[0];
       let listNode = targetAssign ? findFirstListNode(targetAssign.child?.[1]) : undefined;
 
       if (!listNode) {
@@ -242,7 +326,11 @@ export class GnBuildFile {
    */
   async writeGnFile(): Promise<boolean> {
     return await new Promise(resolve => {
-      const child = spawn('gn', ['format', '--read-tree=json', this.filePath]);
+      const child = spawn(getGnBinary(this.rootDir), [
+        'format',
+        '--read-tree=json',
+        this.filePath,
+      ]);
       let stdout = '';
 
       child.on('error', () => {
