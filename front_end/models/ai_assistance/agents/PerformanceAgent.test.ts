@@ -18,7 +18,7 @@ import {
   setUserAgentForTesting,
   updateHostConfig,
 } from '../../../testing/EnvironmentHelpers.js';
-import {getInsightOrError} from '../../../testing/InsightHelpers.js';
+import {getInsightOrError, stubInsightModel} from '../../../testing/InsightHelpers.js';
 import {setupLocaleHooks} from '../../../testing/LocaleHelpers.js';
 import {createNetworkRequest} from '../../../testing/NetworkRequestHelpers.js';
 import {setupSettingsHooks} from '../../../testing/SettingsHelpers.js';
@@ -52,6 +52,29 @@ function deleteAllWidgetData(responses: AiAgent.ResponseData[]): void {
       });
     }
   }
+}
+
+/**
+ * Formats responses for snapshot testing.
+ *
+ * - Strips huge widget data to prevent crashes and bloated snapshots.
+ * - Splits multiline string text in context details into arrays of lines so that
+ *   diffs in snapshots are readable and git diff only highlights the changing line(s).
+ */
+function formatResponsesForSnapshot(responses: AiAgent.ResponseData[]): unknown {
+  deleteAllWidgetData(responses);
+  return responses.map(response => {
+    if ('details' in response && response.details) {
+      return {
+        ...response,
+        details: response.details.map(detail => ({
+                                        ...detail,
+                                        text: detail.text.includes('\n') ? detail.text.split('\n') : detail.text,
+                                      })),
+      };
+    }
+    return response;
+  });
 }
 
 async function loadTrace(context: Mocha.Context|Mocha.Suite|null, name: string,
@@ -186,8 +209,7 @@ describe('PerformanceAgent', function() {
 
         const context = PerformanceTraceContext.PerformanceTraceContext.fromCallTree(aiCallTree);
         const responses = await Array.fromAsync(agent.run('test', {selected: context}));
-        deleteAllWidgetData(responses);
-        snapshotTester.assert(this, JSON.stringify(responses, null, 2));
+        snapshotTester.assert(this, JSON.stringify(formatResponsesForSnapshot(responses), null, 2));
 
         assert.deepEqual(agent.buildRequest({text: ''}, Host.AidaClient.Role.USER).historical_contexts, [
           {
@@ -371,6 +393,14 @@ describe('PerformanceAgent', function() {
       assert.deepEqual(response, {answer: 'hello ````` world'});
     });
 
+    it('extracts suggestions when the response is wrapped in 5 backticks', async () => {
+      const agent = createAgentForConversation();
+      const response = agent.parseTextResponse('`````\nhello world\nSUGGESTIONS: ["suggestion"]\n`````');
+      // Only the fences are stripped, so the newlines after the opening fence and
+      // before the closing fence remain in the answer.
+      assert.deepEqual(response, {answer: '\nhello world\n', suggestions: ['suggestion']});
+    });
+
     it('does not strip out inline code backticks', async () => {
       const agent = createAgentForConversation();
       const response = agent.parseTextResponse('This is code `console.log("hello")`');
@@ -456,8 +486,7 @@ code
       });
 
       const responses = await Array.fromAsync(agent.run('test', {selected: context}));
-      deleteAllWidgetData(responses);
-      snapshotTester.assert(this, JSON.stringify(responses, null, 2));
+      snapshotTester.assert(this, JSON.stringify(formatResponsesForSnapshot(responses), null, 2));
     });
   });
 
@@ -1001,7 +1030,7 @@ code
       const lcpDiscovery = getInsightOrError('LCPDiscovery', parsedTrace.insights, firstNav);
       const insightSetId = [...parsedTrace.insights.keys()][0];
       const insightSet = parsedTrace.insights.get(insightSetId)!;
-      insightSet.model.LCPBreakdown = {
+      stubInsightModel(insightSet, 'LCPBreakdown', {
         insightKey: 'LCPBreakdown',
         state: 'fail',
         lcpMs: 1 as Trace.Types.Timing.Milli,
@@ -1009,7 +1038,7 @@ code
           name: 'largestContentfulPaint::Candidate',
           args: {data: {nodeId: 4}},
         } as unknown as Trace.Types.Events.LargestContentfulPaintCandidate,
-      } as Trace.Insights.Types.InsightModels['LCPBreakdown'];
+      } as Trace.Insights.Types.InsightModels['LCPBreakdown']);
 
       const context = PerformanceTraceContext.PerformanceTraceContext.fromInsight(parsedTrace, lcpDiscovery);
 
@@ -1063,7 +1092,7 @@ code
       const lcpDiscovery = getInsightOrError('LCPDiscovery', parsedTrace.insights, firstNav);
       const insightSetId = [...parsedTrace.insights.keys()][0];
       const insightSet = parsedTrace.insights.get(insightSetId)!;
-      insightSet.model.LCPBreakdown = {
+      stubInsightModel(insightSet, 'LCPBreakdown', {
         insightKey: 'LCPBreakdown',
         state: 'fail',
         lcpMs: 1 as Trace.Types.Timing.Milli,
@@ -1071,7 +1100,7 @@ code
           name: 'largestContentfulPaint::Candidate',
           args: {data: {nodeId: 4}},
         } as unknown as Trace.Types.Events.LargestContentfulPaintCandidate,
-      } as Trace.Insights.Types.InsightModels['LCPBreakdown'];
+      } as Trace.Insights.Types.InsightModels['LCPBreakdown']);
 
       const context = PerformanceTraceContext.PerformanceTraceContext.fromInsight(parsedTrace, lcpDiscovery);
 
@@ -1134,7 +1163,7 @@ code
       const lcpRequest = parsedTrace.data.NetworkRequests.byTime.find(r => r.args.data.url.endsWith('50.jpg'));
       assert.exists(lcpRequest);
 
-      insightSet.model.LCPBreakdown = {
+      stubInsightModel(insightSet, 'LCPBreakdown', {
         insightKey: 'LCPBreakdown',
         state: 'fail',
         lcpMs: 1 as Trace.Types.Timing.Milli,
@@ -1143,7 +1172,7 @@ code
           args: {data: {nodeId: 4}},
         } as unknown as Trace.Types.Events.LargestContentfulPaintCandidate,
         lcpRequest,
-      } as Trace.Insights.Types.InsightModels['LCPBreakdown'];
+      } as Trace.Insights.Types.InsightModels['LCPBreakdown']);
 
       const context = PerformanceTraceContext.PerformanceTraceContext.fromInsight(parsedTrace, lcpDiscovery);
 
@@ -1205,7 +1234,7 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for LCPBreakdown', async function() {
-        insightSet.model.LCPBreakdown = {
+        stubInsightModel(insightSet, 'LCPBreakdown', {
           insightKey: 'LCPBreakdown',
           state: 'fail',
           lcpMs: 1000 as Trace.Types.Timing.Milli,
@@ -1213,7 +1242,7 @@ code
             name: 'largestContentfulPaint::Candidate',
             args: {data: {nodeId: 4}},
           } as unknown as Trace.Types.Events.LargestContentfulPaintCandidate,
-        } as Trace.Insights.Types.InsightModels['LCPBreakdown'];
+        } as Trace.Insights.Types.InsightModels['LCPBreakdown']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1238,11 +1267,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for RenderBlocking', async function() {
-        insightSet.model.RenderBlocking = {
+        stubInsightModel(insightSet, 'RenderBlocking', {
           insightKey: 'RenderBlocking',
           state: 'fail',
           renderBlockingRequests: [],
-        } as unknown as Trace.Insights.Types.InsightModels['RenderBlocking'];
+        } as unknown as Trace.Insights.Types.InsightModels['RenderBlocking']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1267,10 +1296,10 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for LCPDiscovery', async function() {
-        insightSet.model.LCPDiscovery = {
+        stubInsightModel(insightSet, 'LCPDiscovery', {
           insightKey: 'LCPDiscovery',
           state: 'fail',
-        } as unknown as Trace.Insights.Types.InsightModels['LCPDiscovery'];
+        } as unknown as Trace.Insights.Types.InsightModels['LCPDiscovery']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1295,12 +1324,12 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for CLSCulprits', async function() {
-        insightSet.model.CLSCulprits = {
+        stubInsightModel(insightSet, 'CLSCulprits', {
           insightKey: 'CLSCulprits',
           state: 'fail',
           clusters: [],
           worstCluster: null,
-        } as unknown as Trace.Insights.Types.InsightModels['CLSCulprits'];
+        } as unknown as Trace.Insights.Types.InsightModels['CLSCulprits']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1325,14 +1354,14 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for NetworkDependencyTree', async function() {
-        insightSet.model.NetworkDependencyTree = {
+        stubInsightModel(insightSet, 'NetworkDependencyTree', {
           insightKey: 'NetworkDependencyTree',
           state: 'fail',
           rootNodes: [],
           maxTime: 0,
           preconnectedOrigins: [],
           preconnectCandidates: [],
-        } as unknown as Trace.Insights.Types.InsightModels['NetworkDependencyTree'];
+        } as unknown as Trace.Insights.Types.InsightModels['NetworkDependencyTree']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1357,11 +1386,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for ThirdParties', async function() {
-        insightSet.model.ThirdParties = {
+        stubInsightModel(insightSet, 'ThirdParties', {
           insightKey: 'ThirdParties',
           state: 'fail',
           entitySummaries: [],
-        } as unknown as Trace.Insights.Types.InsightModels['ThirdParties'];
+        } as unknown as Trace.Insights.Types.InsightModels['ThirdParties']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1386,11 +1415,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for ForcedReflow', async function() {
-        insightSet.model.ForcedReflow = {
+        stubInsightModel(insightSet, 'ForcedReflow', {
           insightKey: 'ForcedReflow',
           state: 'fail',
           aggregatedBottomUpData: [],
-        } as unknown as Trace.Insights.Types.InsightModels['ForcedReflow'];
+        } as unknown as Trace.Insights.Types.InsightModels['ForcedReflow']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1415,11 +1444,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for Cache', async function() {
-        insightSet.model.Cache = {
+        stubInsightModel(insightSet, 'Cache', {
           insightKey: 'Cache',
           state: 'fail',
           requests: [],
-        } as unknown as Trace.Insights.Types.InsightModels['Cache'];
+        } as unknown as Trace.Insights.Types.InsightModels['Cache']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1444,10 +1473,10 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for INPBreakdown', async function() {
-        insightSet.model.INPBreakdown = {
+        stubInsightModel(insightSet, 'INPBreakdown', {
           insightKey: 'INPBreakdown',
           state: 'fail',
-        } as unknown as Trace.Insights.Types.InsightModels['INPBreakdown'];
+        } as unknown as Trace.Insights.Types.InsightModels['INPBreakdown']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1472,10 +1501,10 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for DocumentLatency', async function() {
-        insightSet.model.DocumentLatency = {
+        stubInsightModel(insightSet, 'DocumentLatency', {
           insightKey: 'DocumentLatency',
           state: 'fail',
-        } as unknown as Trace.Insights.Types.InsightModels['DocumentLatency'];
+        } as unknown as Trace.Insights.Types.InsightModels['DocumentLatency']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1500,12 +1529,12 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for DOMSize', async function() {
-        insightSet.model.DOMSize = {
+        stubInsightModel(insightSet, 'DOMSize', {
           insightKey: 'DOMSize',
           state: 'fail',
           largeLayoutUpdates: [],
           largeStyleRecalcs: [],
-        } as unknown as Trace.Insights.Types.InsightModels['DOMSize'];
+        } as unknown as Trace.Insights.Types.InsightModels['DOMSize']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1530,12 +1559,12 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for DuplicatedJavaScript', async function() {
-        insightSet.model.DuplicatedJavaScript = {
+        stubInsightModel(insightSet, 'DuplicatedJavaScript', {
           insightKey: 'DuplicatedJavaScript',
           state: 'fail',
           duplicationGroupedByNodeModules: new Map(),
           wastedBytes: 0,
-        } as unknown as Trace.Insights.Types.InsightModels['DuplicatedJavaScript'];
+        } as unknown as Trace.Insights.Types.InsightModels['DuplicatedJavaScript']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1560,12 +1589,12 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for ImageDelivery', async function() {
-        insightSet.model.ImageDelivery = {
+        stubInsightModel(insightSet, 'ImageDelivery', {
           insightKey: 'ImageDelivery',
           state: 'fail',
           optimizableImages: [],
           wastedBytes: 0,
-        } as unknown as Trace.Insights.Types.InsightModels['ImageDelivery'];
+        } as unknown as Trace.Insights.Types.InsightModels['ImageDelivery']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1590,11 +1619,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for FontDisplay', async function() {
-        insightSet.model.FontDisplay = {
+        stubInsightModel(insightSet, 'FontDisplay', {
           insightKey: 'FontDisplay',
           state: 'fail',
           fonts: [],
-        } as unknown as Trace.Insights.Types.InsightModels['FontDisplay'];
+        } as unknown as Trace.Insights.Types.InsightModels['FontDisplay']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1619,13 +1648,13 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for SlowCSSSelector', async function() {
-        insightSet.model.SlowCSSSelector = {
+        stubInsightModel(insightSet, 'SlowCSSSelector', {
           insightKey: 'SlowCSSSelector',
           state: 'fail',
           totalElapsedMs: 0,
           totalMatchAttempts: 0,
           totalMatchCount: 0,
-        } as unknown as Trace.Insights.Types.InsightModels['SlowCSSSelector'];
+        } as unknown as Trace.Insights.Types.InsightModels['SlowCSSSelector']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1650,11 +1679,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for LegacyJavaScript', async function() {
-        insightSet.model.LegacyJavaScript = {
+        stubInsightModel(insightSet, 'LegacyJavaScript', {
           insightKey: 'LegacyJavaScript',
           state: 'fail',
           legacyJavaScriptResults: new Map(),
-        } as unknown as Trace.Insights.Types.InsightModels['LegacyJavaScript'];
+        } as unknown as Trace.Insights.Types.InsightModels['LegacyJavaScript']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1679,11 +1708,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for Viewport', async function() {
-        insightSet.model.Viewport = {
+        stubInsightModel(insightSet, 'Viewport', {
           insightKey: 'Viewport',
           state: 'fail',
           mobileOptimized: false,
-        } as unknown as Trace.Insights.Types.InsightModels['Viewport'];
+        } as unknown as Trace.Insights.Types.InsightModels['Viewport']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1708,11 +1737,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for ModernHTTP', async function() {
-        insightSet.model.ModernHTTP = {
+        stubInsightModel(insightSet, 'ModernHTTP', {
           insightKey: 'ModernHTTP',
           state: 'fail',
           http1Requests: [],
-        } as unknown as Trace.Insights.Types.InsightModels['ModernHTTP'];
+        } as unknown as Trace.Insights.Types.InsightModels['ModernHTTP']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -1737,11 +1766,11 @@ code
       });
 
       it('yields a PERF_INSIGHT widget for CharacterSet', async function() {
-        insightSet.model.CharacterSet = {
+        stubInsightModel(insightSet, 'CharacterSet', {
           insightKey: 'CharacterSet',
           state: 'fail',
           data: {hasHttpCharset: false, metaCharsetDisposition: 'missing'},
-        } as unknown as Trace.Insights.Types.InsightModels['CharacterSet'];
+        } as unknown as Trace.Insights.Types.InsightModels['CharacterSet']);
 
         const agent = createAgentForConversation({
           aidaClient: mockAidaClient([
@@ -2070,6 +2099,7 @@ code
         name: Trace.Types.Events.Name.SYNTHETIC_NETWORK_REQUEST,
         args: {
           data: {
+            url: 'https://example.com/api',
             responseHeaders: [
               {name: 'x-csrf-token', value: 'secret'},
               {name: 'content-type', value: 'text/html'},
@@ -2167,7 +2197,6 @@ code
       const headers = details.args.data.headers;
 
       assert.deepEqual(headers, [
-        {name: 'x-csrf-token', value: '<redacted>'},
         {name: 'content-type', value: 'text/html'},
       ]);
     });

@@ -54,6 +54,7 @@ import * as InlineEditor from '../../ui/legacy/components/inline_editor/inline_e
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import {render} from '../../ui/lit/lit.js';
+import * as SettingsUI from '../../ui/settings/settings.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 import * as PanelsCommon from '../common/common.js';
 
@@ -176,6 +177,34 @@ const HIGHLIGHTABLE_PROPERTIES = [
   {mode: 'align-content', properties: ['align-content']},
   {mode: 'align-items', properties: ['align-items']},
   {mode: 'flexibility', properties: ['flex', 'flex-basis', 'flex-grow', 'flex-shrink']},
+  {mode: 'position-area', properties: ['position-area']},
+  {
+    mode: 'anchor-positioning',
+    properties: [
+      'position',
+      'position-anchor',
+      'position-try',
+      'position-try-fallbacks',
+      'position-try-order',
+      'position-visibility',
+    ],
+  },
+  {
+    mode: 'insets',
+    properties: [
+      'inset',
+      'inset-block',
+      'inset-block-start',
+      'inset-block-end',
+      'inset-inline',
+      'inset-inline-start',
+      'inset-inline-end',
+      'top',
+      'right',
+      'bottom',
+      'left',
+    ],
+  },
 ];
 
 const DISCLAIMER_TOOLTIP_ID = 'styles-ai-code-completion-disclaimer-tooltip';
@@ -210,6 +239,7 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
   private userOperation = false;
   isEditingStyle = false;
   #filterRegex: RegExp|null = null;
+  #filterUpdateScheduled = false;
   #isRegex = false;
   #filterText = '';
   private isActivePropertyHighlighted = false;
@@ -252,10 +282,10 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
     this.registerRequiredCSS(stylesSidebarPaneStyles);
     Common.Settings.Settings.instance().moduleSetting('text-editor-indent').addChangeListener(this.requestUpdate, this);
     Common.Settings.Settings.instance()
-        .moduleSetting('collapse-non-contributing-css-rules')
+        .resolve(SettingsUI.ElementsSettings.collapseNonContributingCSSRulesSettingDescriptor)
         .addChangeListener(this.updateCollapsedSectionsSetting, this);
     Common.Settings.Settings.instance()
-        .moduleSetting('show-inactive-css-rules')
+        .resolve(SettingsUI.ElementsSettings.showInactiveCSSRulesSettingDescriptor)
         .addChangeListener(this.requestUpdate, this);
     this.toolbarPaneElement = this.createStylesSidebarToolbar();
     this.noMatchesElement = this.contentElement.createChild('div', 'gray-info-message hidden');
@@ -271,6 +301,21 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
 
     this.#swatchPopoverHelper.addEventListener(InlineEditor.SwatchPopoverHelper.Events.WILL_SHOW_POPOVER,
                                                this.hideAllPopovers, this);
+    this.linkifier.addEventListener(Components.Linkifier.Events.LIVE_LOCATION_UPDATED, () => {
+      if (!this.filterRegex() || this.#filterUpdateScheduled) {
+        return;
+      }
+      this.#filterUpdateScheduled = true;
+      queueMicrotask(() => {
+        if (!this.#filterUpdateScheduled) {
+          return;
+        }
+        this.#filterUpdateScheduled = false;
+        if (this.filterRegex()) {
+          this.updateFilter();
+        }
+      });
+    });
     this.decorator = new StylePropertyHighlighter(this);
     this.contentElement.classList.add('styles-pane');
 
@@ -323,7 +368,9 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
 
   get webCustomData(): WebCustomData|undefined {
     if (!this.#webCustomData &&
-        Common.Settings.Settings.instance().moduleSetting('show-css-property-documentation-on-hover').get()) {
+        Common.Settings.Settings.instance()
+            .resolve(SettingsUI.ElementsSettings.showCSSPropertyDocumentationOnHoverSettingDescriptor)
+            .get()) {
       // WebCustomData.create() fetches the property docs, so this must happen lazily.
       this.#webCustomData = WebCustomData.create();
     }
@@ -547,7 +594,8 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
     }, FILTER_IDLE_PERIOD);
   }
 
-  refreshUpdate(editedSection: StylePropertiesSection, editedTreeElement?: StylePropertyTreeElement): void {
+  refreshUpdate(editedSection: StylePropertiesSection, editedTreeElement?: StylePropertyTreeElement,
+                force = false): void {
     if (editedTreeElement) {
       for (const section of this.allSections()) {
         if (section instanceof BlankStylePropertiesSection && section.isBlank) {
@@ -557,7 +605,7 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
       }
     }
 
-    if (this.isEditingStyle) {
+    if (this.isEditingStyle && !force) {
       return;
     }
     const node = this.node();
@@ -734,16 +782,22 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
     }
     this.contentElement.classList.toggle('is-editing-style', editing);
     this.isEditingStyle = editing;
-    this.setActiveProperty(null);
+    if (!editing) {
+      this.setActiveProperty(null);
+    }
   }
 
   setActiveProperty(treeElement: StylePropertyTreeElement|null): void {
+    if (this.isEditingStyle) {
+      return;
+    }
     if (this.isActivePropertyHighlighted) {
       SDK.OverlayModel.OverlayModel.hideDOMNodeHighlight(SDK.TargetManager.TargetManager.instance());
     }
     this.isActivePropertyHighlighted = false;
 
-    if (!this.node()) {
+    const node = this.node();
+    if (!node) {
       return;
     }
 
@@ -757,14 +811,14 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
       if (!properties.includes(treeElement.name)) {
         continue;
       }
-      const node = this.node();
-      if (!node) {
-        continue;
-      }
-      node.domModel().overlayModel().highlightInOverlay({node: (this.node() as SDK.DOMModel.DOMNode), selectorList},
-                                                        mode);
+      node.domModel().overlayModel().highlightInOverlay({node, selectorList}, mode);
       this.isActivePropertyHighlighted = true;
-      break;
+      return;
+    }
+
+    if (treeElement.value.includes('anchor(') || treeElement.value.includes('anchor-size(')) {
+      node.domModel().overlayModel().highlightInOverlay({node, selectorList}, 'anchor-positioning');
+      this.isActivePropertyHighlighted = true;
     }
   }
 
@@ -1209,7 +1263,9 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
     LayersWidget.ButtonProvider.instance().item().setVisible(false);
     const animationsPanelVisible = UI.ViewManager.ViewManager.instance().isViewVisible('animations');
     const cssAnimationsOnlyWhenAnimationsTabOpen =
-        Common.Settings.Settings.instance().moduleSetting('css-animations-only-when-animations-tab-open').get();
+        Common.Settings.Settings.instance()
+            .resolve(SettingsUI.ElementsSettings.cssAnimationsOnlyWhenAnimationsTabOpenSettingDescriptor)
+            .get();
 
     let totalProperties = 0;
     for (const style of matchedStyles.nodeStyles()) {
@@ -1416,7 +1472,9 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
 
     await this.idleCallbackManager.awaitDone();
 
-    const showInactiveCSSRules = Common.Settings.Settings.instance().moduleSetting('show-inactive-css-rules').get();
+    const showInactiveCSSRules = Common.Settings.Settings.instance()
+                                     .resolve(SettingsUI.ElementsSettings.showInactiveCSSRulesSettingDescriptor)
+                                     .get();
     if (!showInactiveCSSRules) {
       return blocks;
     }
@@ -1559,6 +1617,7 @@ export class StylesSidebarPane extends StylesSidebarPaneBase implements StylesCo
   }
 
   private updateFilter(): void {
+    this.#filterUpdateScheduled = false;
     let hasAnyVisibleBlock = false;
     let visibleSections = 0;
     for (const block of this.sectionBlocks) {

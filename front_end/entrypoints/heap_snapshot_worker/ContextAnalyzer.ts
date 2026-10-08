@@ -29,6 +29,11 @@ type ScopeInfoNodeIndex = Platform.Brand.Brand<number, 'ScopeInfoNodeIndex'>;
 type ContextNodeIndex = Platform.Brand.Brand<number, 'ContextNodeIndex'>;
 
 /**
+ * Index of a `system / Map` node within the heap snapshot's node array.
+ */
+type MapNodeIndex = Platform.Brand.Brand<number, 'MapNodeIndex'>;
+
+/**
  * Values addressed by scope. Since a `ScopeId` is only unique within its
  * script, scopes are keyed by script first.
  */
@@ -74,6 +79,8 @@ interface ScopeAccumulator {
 }
 
 interface LiveClosure {
+  // The JSFunction or generator object this entry was created for.
+  ownerNodeIndex: number;
   contextNodeIndex: ContextNodeIndex;
   scriptNodeIndex: ScriptNodeIndex;
   scopeId: ScopeId;
@@ -99,14 +106,11 @@ interface HeapScan {
   scripts: Map<ScriptNodeIndex, ScriptInfo>;
   contextNodes: ContextNodeInfo[];
   liveClosures: LiveClosure[];
-  // Maps a ScopeInfo to the script it belongs to. Only contains the ScopeInfos
-  // directly referenced by a SharedFunctionInfo, the remaining ones are resolved
-  // and memoized on demand by `resolveScopeInfoScriptNodeIndex`.
-  //
-  // A stored `undefined` is a memoized failed lookup, i.e. walking the
-  // `outer_scope_info` chain of that ScopeInfo did not reach a script. It is
-  // therefore not the same as an absent entry, which merely means "not resolved
-  // yet", so lookups have to distinguish the two through `has()`.
+  // Top-level functions of modules that finished evaluating.
+  finishedModuleFunctionNodeIndexes: Set<number>;
+  // Maps a ScopeInfo to the script it belongs to. A stored `undefined` is a memoized
+  // failed lookup. It is therefore not the same as an absent entry, which merely means
+  // "not resolved yet".
   scopeInfoScriptNodeIndexes: Map<ScopeInfoNodeIndex, ScriptNodeIndex|undefined>;
 }
 
@@ -119,7 +123,7 @@ export function analyzeContexts(snapshot: HeapSnapshot): HeapSnapshotModel.HeapS
   const scan = scanHeap(snapshot);
 
   // (3) Group live closures by function scope and record the context chains they can reach.
-  const liveFunctionsByScript = buildLiveFunctions(snapshot, scan.liveClosures);
+  const liveFunctionsByScript = buildLiveFunctions(snapshot, scan.liveClosures, scan.finishedModuleFunctionNodeIndexes);
 
   // (4) Correlate contexts and their field values with embedded scopes.
   const {scopes, scriptsWithoutScopes} = correlateContextsWithScopes(snapshot, scan, scopesByScript);
@@ -245,6 +249,9 @@ function scanHeap(snapshot: HeapSnapshot): HeapScan {
   const scripts = new Map<ScriptNodeIndex, ScriptInfo>();
   const contextNodes: ContextNodeInfo[] = [];
   const liveClosures: LiveClosure[] = [];
+  const finishedModuleFunctionNodeIndexes = new Set<number>();
+  // Caches for each map whether it belongs to a generator object. See `isGeneratorObject`.
+  const generatorMapNodeIndexes = new Map<MapNodeIndex, boolean>();
   const scopeInfoScriptNodeIndexes = new Map<ScopeInfoNodeIndex, ScriptNodeIndex|undefined>();
   const node = snapshot.createNode();
   const nodes = snapshot.nodes;
@@ -257,16 +264,17 @@ function scanHeap(snapshot: HeapSnapshot): HeapScan {
 
     if (rawName.startsWith('system / Script')) {
       processScript(scripts, node);
+      processScriptScopeInfos(scopeInfoScriptNodeIndexes, node);
     } else if (snapshot.isContextObject(node)) {
       processContext(contextNodes, node);
     } else if (node.rawType() === nodeClosureType) {
       processClosure(liveClosures, node);
-    } else if (rawName.startsWith('system / SharedFunctionInfo')) {
-      processSharedFunctionInfo(scopeInfoScriptNodeIndexes, node);
+    } else if (isGeneratorObject(generatorMapNodeIndexes, node)) {
+      processGeneratorObject(liveClosures, finishedModuleFunctionNodeIndexes, node);
     }
   }
 
-  return {scripts, contextNodes, liveClosures, scopeInfoScriptNodeIndexes};
+  return {scripts, contextNodes, liveClosures, finishedModuleFunctionNodeIndexes, scopeInfoScriptNodeIndexes};
 }
 
 function processScript(scripts: Map<ScriptNodeIndex, ScriptInfo>, node: HeapSnapshotNode): void {
@@ -281,6 +289,137 @@ function processScript(scripts: Map<ScriptNodeIndex, ScriptInfo>, node: HeapSnap
     name,
     nodeId: node.id(),
   });
+}
+
+function processScriptScopeInfos(
+    scopeInfoScriptNodeIndexes: Map<ScopeInfoNodeIndex, ScriptNodeIndex|undefined>,
+    scriptNode: HeapSnapshotNode,
+    ): void {
+  const infos = scriptNode.findInternalEdgeTarget('infos');
+  if (!infos) {
+    return;
+  }
+
+  const scriptNodeIndex = scriptNode.nodeIndex as ScriptNodeIndex;
+  const scopeInfoNode = scriptNode.snapshot.createNode();
+
+  // A script created by a direct `eval` records the scope its `eval` call appeared in. That scope
+  // and the ones enclosing it belong to the calling script, so walks from this script's ScopeInfos
+  // have to stop there. This is like V8's `Scope::DeserializeScopeChain` detecting eval boundaries.
+  //
+  // Stopping at the root scope (see `attributeScopeInfoChain`) is not enough here: the eval scope
+  // only gets a ScopeInfo if it needs a context. Without one, the ScopeInfo chains of this script's
+  // functions skip it and lead straight to the call-site scope, without passing a root scope.
+  //
+  // The call-site scope itself is assigned by the calling script, which lists it in its `infos`.
+  const evalFromScopeInfo = scriptNode.findInternalEdgeTarget('eval_from_scope_info');
+  const stopAtNodeIndex = evalFromScopeInfo?.rawName() === 'system / ScopeInfo' ?
+      evalFromScopeInfo.nodeIndex as ScopeInfoNodeIndex :
+      undefined;
+
+  for (let iter = infos.edges(); iter.hasNext(); iter.next()) {
+    const info = iter.edge.node();
+    const infoName = info.rawName();
+
+    // Besides SharedFunctionInfos, V8 lists the ScopeInfo of the innermost scope with a context
+    // around each direct `eval` call of this script. It belongs to this script, as do the scopes
+    // enclosing it up to the root scope of this script.
+    if (infoName === 'system / ScopeInfo') {
+      attributeScopeInfoChain(scopeInfoScriptNodeIndexes, info.nodeIndex as ScopeInfoNodeIndex, stopAtNodeIndex,
+                              scriptNodeIndex, scopeInfoNode);
+      continue;
+    }
+
+    if (!infoName.startsWith('system / SharedFunctionInfo')) {
+      continue;
+    }
+    const sharedFunctionInfo = info;
+
+    // A compiled function has a ScopeInfo of its own in `name_or_scope_info`. It belongs to this
+    // script, as do the scopes enclosing it up to the root scope of this script.
+    const scopeInfo = sharedFunctionInfo.findInternalEdgeTarget('name_or_scope_info');
+    if (scopeInfo?.rawName() === 'system / ScopeInfo') {
+      attributeScopeInfoChain(scopeInfoScriptNodeIndexes, scopeInfo.nodeIndex as ScopeInfoNodeIndex, stopAtNodeIndex,
+                              scriptNodeIndex, scopeInfoNode);
+      continue;
+    }
+
+    // While a function is uncompiled it has no ScopeInfo of its own, so use the ScopeInfo of its
+    // enclosing scope instead. A script's root function is always compiled, but if it weren't, its
+    // enclosing scope would lie outside of this script, so skip it.
+    const scopeId = sharedFunctionInfo.findInternalEdgeTarget('scope_id')?.nodeValueAsInt();
+    if (scopeId === undefined || isScriptRootScopeId(scopeId)) {
+      continue;
+    }
+
+    // Except for the root function, the enclosing ScopeInfo belongs to this script. The exception
+    // is a function in eval'd code whose eval scope has no context: its enclosing ScopeInfo is then
+    // the scope around the `eval` call in the calling script (`eval_from_scope_info`), where
+    // `attributeScopeInfoChain` stops.
+    const outerScopeInfo = sharedFunctionInfo.findInternalEdgeTarget('raw_outer_scope_info_or_feedback_metadata');
+    if (outerScopeInfo?.rawName() === 'system / ScopeInfo') {
+      attributeScopeInfoChain(scopeInfoScriptNodeIndexes, outerScopeInfo.nodeIndex as ScopeInfoNodeIndex,
+                              stopAtNodeIndex, scriptNodeIndex, scopeInfoNode);
+    }
+  }
+}
+
+/**
+ * Assigns the ScopeInfo at `scopeInfoNodeIndex` and the ones enclosing it to the script at
+ * `scriptNodeIndex`. Stops at the root scope of the script, or at `stopAtNodeIndex`, the
+ * `eval_from_scope_info` of the script, which belongs to the calling script.
+ *
+ * Only this function assigns ScopeInfos while scanning the heap, and it always continues up to
+ * such a boundary. An already assigned ScopeInfo therefore means that its enclosing ScopeInfos
+ * are assigned as well, so the walk can stop there too.
+ */
+function attributeScopeInfoChain(
+    scopeInfoScriptNodeIndexes: Map<ScopeInfoNodeIndex, ScriptNodeIndex|undefined>,
+    scopeInfoNodeIndex: ScopeInfoNodeIndex,
+    stopAtNodeIndex: ScopeInfoNodeIndex|undefined,
+    scriptNodeIndex: ScriptNodeIndex,
+    scopeInfoNode: HeapSnapshotNode,
+    ): void {
+  let currentNodeIndex = scopeInfoNodeIndex;
+  for (;;) {
+    if (currentNodeIndex === stopAtNodeIndex) {
+      // This is the call site of the `eval` that created this script. It belongs to the calling
+      // script.
+      return;
+    }
+    if (scopeInfoScriptNodeIndexes.has(currentNodeIndex)) {
+      // This scope info was already assigned to a script.
+      return;
+    }
+    scopeInfoScriptNodeIndexes.set(currentNodeIndex, scriptNodeIndex);
+
+    scopeInfoNode.nodeIndex = currentNodeIndex;
+    // A root scope's `outer_scope_info` leads into another script (e.g. the one calling `eval`), so
+    // stop here. This only catches root scopes that have a context. The call site of a context-less
+    // eval scope is caught through `stopAtNodeIndex` above.
+    if (isScriptRootScopeInfo(scopeInfoNode)) {
+      return;
+    }
+    // The outer scope of a non-root scope can be assigned to the same script.
+    const outerScopeInfo = scopeInfoNode.findInternalEdgeTarget('outer_scope_info');
+    if (!outerScopeInfo) {
+      return;
+    }
+    currentNodeIndex = outerScopeInfo.nodeIndex as ScopeInfoNodeIndex;
+  }
+}
+
+function isScriptRootScopeInfo(node: HeapSnapshotNode): boolean {
+  const scopeId = node.findInternalEdgeTarget('scope_id')?.nodeValueAsInt();
+  return scopeId !== undefined && isScriptRootScopeId(scopeId);
+}
+
+function isScriptRootScopeId(scopeId: number): boolean {
+  // -2 is the scope id V8 gives the outermost scope of a script: its script, eval or module scope.
+  // V8 derives scope ids from source positions and uses negative ids for scopes that would otherwise
+  // start at position 0. The other one is -1 for a wrapped function (`ScriptCompiler::CompileFunction`),
+  // which is still enclosed by an eval scope of the same script.
+  return scopeId === -2;
 }
 
 function processContext(contextNodes: ContextNodeInfo[], node: HeapSnapshotNode): void {
@@ -301,6 +440,11 @@ function processClosure(liveClosures: LiveClosure[], node: HeapSnapshotNode): vo
   if (!sharedFunctionInfo || !closureContext) {
     return;
   }
+  addLiveClosure(liveClosures, node, sharedFunctionInfo, closureContext);
+}
+
+function addLiveClosure(liveClosures: LiveClosure[], ownerNode: HeapSnapshotNode, sharedFunctionInfo: HeapSnapshotNode,
+                        contextNode: HeapSnapshotNode): void {
   const script = sharedFunctionInfo.findInternalEdgeTarget('script');
   if (!script) {
     return;
@@ -308,28 +452,97 @@ function processClosure(liveClosures: LiveClosure[], node: HeapSnapshotNode): vo
   const scopeId = sharedFunctionInfo.findInternalEdgeTarget('scope_id')?.nodeValueAsInt() as ScopeId | undefined;
   if (scopeId !== undefined) {
     liveClosures.push({
-      contextNodeIndex: closureContext.nodeIndex as ContextNodeIndex,
+      ownerNodeIndex: ownerNode.nodeIndex,
+      contextNodeIndex: contextNode.nodeIndex as ContextNodeIndex,
       scriptNodeIndex: script.nodeIndex as ScriptNodeIndex,
       scopeId,
     });
   }
 }
 
-function processSharedFunctionInfo(scopeInfoScriptNodeIndexes: Map<ScopeInfoNodeIndex, ScriptNodeIndex|undefined>,
-                                   node: HeapSnapshotNode): void {
-  const scopeInfo = node.findInternalEdgeTarget('name_or_scope_info');
-  const script = node.findInternalEdgeTarget('script');
-  if (scopeInfo?.rawName() !== 'system / ScopeInfo' || !script?.rawName().startsWith('system / Script')) {
+// V8's `JSGeneratorObject::kGeneratorClosed`: the generator has finished and can't be resumed.
+const GENERATOR_CLOSED = -1;
+
+/**
+ * Handles generator objects, which V8 uses for generators, async functions, async generators and
+ * the top-level code of modules.
+ */
+function processGeneratorObject(liveClosures: LiveClosure[], finishedModuleFunctionNodeIndexes: Set<number>,
+                                node: HeapSnapshotNode): void {
+  const continuation = node.findInternalEdgeTarget('continuation')?.nodeValueAsInt();
+  const generatorFunction = node.findInternalEdgeTarget('function');
+  if (continuation === undefined || generatorFunction?.rawType() !== node.snapshot.nodeClosureType) {
     return;
   }
-  scopeInfoScriptNodeIndexes.set(scopeInfo.nodeIndex as ScopeInfoNodeIndex, script.nodeIndex as ScriptNodeIndex);
+  const sharedFunctionInfo = generatorFunction.findInternalEdgeTarget('shared');
+  if (!sharedFunctionInfo) {
+    return;
+  }
+  if (continuation === GENERATOR_CLOSED) {
+    const scopeId = sharedFunctionInfo.findInternalEdgeTarget('scope_id')?.nodeValueAsInt();
+
+    // Only the top-level code of a module is both a generator and a root scope.
+    if (scopeId !== undefined && isScriptRootScopeId(scopeId)) {
+      // A module stores a reference to its generator object. The generator object then
+      // references the top-level JSFunction. Once the generator object is finished its
+      // JSFunction can't run anymore and user code can't call it. Here we record such closures
+      // in order to skip them later in buildLiveFunctions().
+      finishedModuleFunctionNodeIndexes.add(generatorFunction.nodeIndex);
+    }
+
+    // A finished generator can't run again, so it doesn't get a LiveClosure. That way the fields
+    // of its context can be reported as dead.
+    return;
+  }
+  const generatorContext = node.findInternalEdgeTarget('context');
+  if (generatorContext) {
+    // The context of the generator's function is the one the function was created in. The body
+    // of the generator, however, runs in a context of its own, which only the generator object
+    // refers to. A generator therefore counts as a closure of its function with the context
+    // it resumes in.
+    addLiveClosure(liveClosures, node, sharedFunctionInfo, generatorContext);
+  }
 }
 
-function buildLiveFunctions(snapshot: HeapSnapshot, liveClosures: LiveClosure[]): ByScope<LiveFunction> {
+// V8's instance types of `JSGeneratorObject` and its subclasses.
+const GENERATOR_INSTANCE_TYPE_NAMES = new Set([
+  'JS_GENERATOR_OBJECT_TYPE',
+  'JS_ASYNC_FUNCTION_OBJECT_TYPE',
+  'JS_ASYNC_GENERATOR_OBJECT_TYPE',
+]);
+
+/**
+ * Checks the instance type of the object's map, so that other objects with fields of the same name
+ * aren't mistaken for generator objects. The result is cached for each map.
+ */
+function isGeneratorObject(generatorMapNodeIndexes: Map<MapNodeIndex, boolean>, node: HeapSnapshotNode): boolean {
+  if (node.rawType() !== node.snapshot.nodeObjectType) {
+    return false;
+  }
+  const map = node.findInternalEdgeTarget('map');
+  if (!map) {
+    return false;
+  }
+  const mapNodeIndex = map.nodeIndex as MapNodeIndex;
+  let isGenerator = generatorMapNodeIndexes.get(mapNodeIndex);
+  if (isGenerator === undefined) {
+    const instanceTypeName = map.findInternalEdgeTarget('instance_type_name')?.rawName();
+    isGenerator = instanceTypeName !== undefined && GENERATOR_INSTANCE_TYPE_NAMES.has(instanceTypeName);
+    generatorMapNodeIndexes.set(mapNodeIndex, isGenerator);
+  }
+  return isGenerator;
+}
+
+function buildLiveFunctions(snapshot: HeapSnapshot, liveClosures: LiveClosure[],
+                            finishedModuleFunctionNodeIndexes: Set<number>): ByScope<LiveFunction> {
   const liveFunctionsByScript: ByScope<LiveFunction> = new Map();
   const node = snapshot.createNode();
 
   for (const closure of liveClosures) {
+    if (finishedModuleFunctionNodeIndexes.has(closure.ownerNodeIndex)) {
+      // The top-level code of this module has finished and can't run anymore.
+      continue;
+    }
     let scriptFunctions = liveFunctionsByScript.get(closure.scriptNodeIndex);
     if (!scriptFunctions) {
       scriptFunctions = new Map<ScopeId, LiveFunction>();
@@ -482,6 +695,11 @@ function resolveScopeInfoScriptNodeIndex(
     seen.add(currentNodeIndex);
     visited.push(currentNodeIndex);
     node.nodeIndex = currentNodeIndex;
+    if (isScriptRootScopeInfo(node)) {
+      // This scope belongs to a script of its own, so leaving it through
+      // `outer_scope_info` would attribute it to the wrong script.
+      break;
+    }
     const outerScopeInfo = node.findInternalEdgeTarget('outer_scope_info');
     if (!outerScopeInfo) {
       break;

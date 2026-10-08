@@ -10,6 +10,7 @@ import * as InlineEditor from '../../ui/legacy/components/inline_editor/inline_e
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import {html, render} from '../../ui/lit/lit.js';
+import * as SettingsUI from '../../ui/settings/settings.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
 import * as ElementsComponents from './components/components.js';
@@ -102,7 +103,9 @@ export class StandaloneStylesContainer extends StandaloneStylesContainerBase imp
 
   get webCustomData(): WebCustomData|undefined {
     if (!this.#webCustomData &&
-        Common.Settings.Settings.instance().moduleSetting('show-css-property-documentation-on-hover').get()) {
+        Common.Settings.Settings.instance()
+            .resolve(SettingsUI.ElementsSettings.showCSSPropertyDocumentationOnHoverSettingDescriptor)
+            .get()) {
       this.#webCustomData = WebCustomData.create();
     }
     return this.#webCustomData;
@@ -206,14 +209,15 @@ export class StandaloneStylesContainer extends StandaloneStylesContainerBase imp
   setActiveProperty(_treeElement: StylePropertyTreeElement|null): void {
   }
 
-  refreshUpdate(editedSection: StylePropertiesSection, editedTreeElement?: StylePropertyTreeElement): void {
+  refreshUpdate(editedSection: StylePropertiesSection, editedTreeElement?: StylePropertyTreeElement,
+                force = false): void {
     if (editedTreeElement) {
       for (const section of this.#sections) {
         section.updateVarFunctions(editedTreeElement);
       }
     }
 
-    if (this.isEditingStyle) {
+    if (this.isEditingStyle && !force) {
       this.#onUpdateFinished();
       return;
     }

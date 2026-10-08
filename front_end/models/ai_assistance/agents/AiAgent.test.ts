@@ -369,6 +369,39 @@ describe('AiAgent', () => {
           },
         ]);
       });
+
+      it('parses partial answers with the same suggestions parsing as completed answers', async () => {
+        const agent = new AiAgentMock({
+          aidaClient: mockAidaClient([[
+            {
+              explanation: 'Answer. SUGGESTIONS: ["a',
+            },
+            {
+              explanation: 'Answer. SUGGESTIONS: ["a"]',
+            },
+          ]]),
+        });
+
+        const responses = await Array.fromAsync(agent.run('query', {selected: mockConversationContext()}));
+
+        assert.deepEqual(responses, [
+          {
+            type: AiAssistance.AiAgent.ResponseType.QUERYING,
+          },
+          {
+            type: AiAssistance.AiAgent.ResponseType.ANSWER,
+            complete: false,
+            text: 'Answer. ',
+          },
+          {
+            type: AiAssistance.AiAgent.ResponseType.ANSWER,
+            text: 'Answer. ',
+            complete: true,
+            rpcId: undefined,
+            suggestions: ['a'],
+          },
+        ]);
+      });
     });
 
     it('should yield unknown error when aida doConversation does not return anything', async () => {
@@ -680,7 +713,7 @@ describe('AiAgent', () => {
         confirmSideEffectForTest: <T>() => {
           const resolvers = Promise.withResolvers<T>();
           // 1. Simulate the user clicking "Continue" (approving the run).
-          resolvers.resolve(true as unknown as T);
+          resolvers.resolve(AiAssistance.Tool.PermissionDecision.ALLOW_ONCE as unknown as T);
           // 2. Simulate that while the user was deciding, the page navigated cross-origin.
           // This flips the flag so that the next call to allowedOrigin() will return {blocked: true}.
           originBlocked = true;
@@ -775,7 +808,7 @@ describe('AiAgent', () => {
         ]),
         confirmSideEffectForTest: <T>() => {
           const resolvers = Promise.withResolvers<T>();
-          resolvers.resolve(true as unknown as T);
+          resolvers.resolve(AiAssistance.Tool.PermissionDecision.ALLOW_ONCE as unknown as T);
           return resolvers;
         },
       });
@@ -807,6 +840,53 @@ describe('AiAgent', () => {
       assert.isDefined(abortListener);
       sinon.assert.calledWith(removeEventListenerSpy, 'abort', abortListener);
     });
+
+    it('should yield MAX_STEPS error and pair the final functionCall in history if the model still does not return a final answer after MAX_STEPS',
+       async () => {
+         const agent = new AgentWithFunction({
+           aidaClient: mockAidaClient(Array(AiAssistance.AiAgent.MAX_STEPS).fill([
+             {
+               explanation: 'Calling function',
+               functionCalls: [{
+                 name: 'testFn',
+                 args: {},
+               }],
+             },
+           ])),
+         });
+
+         const responses = await Array.fromAsync(agent.run('query', {selected: mockConversationContext()}));
+
+         const errorResponse = findFirstErrorResponse(responses);
+         assert.strictEqual(errorResponse.error, AiAssistance.AiAgent.ErrorType.MAX_STEPS);
+         assert.strictEqual(agent.called, AiAssistance.AiAgent.MAX_STEPS);
+         assert.deepEqual(agent.history.slice(-2), [
+           {
+             role: Host.AidaClient.Role.MODEL,
+             parts: [
+               {text: 'Calling function'},
+               {
+                 functionCall: {
+                   name: 'testFn',
+                   args: {},
+                 },
+               },
+             ],
+           },
+           {
+             role: Host.AidaClient.Role.ROLE_UNSPECIFIED,
+             parts: [{
+               functionResponse: {
+                 name: 'testFn',
+                 response: {
+                   result: {},
+                   widgets: undefined,
+                 },
+               },
+             }],
+           },
+         ]);
+       });
   });
 
   describe('parseTextResponseForSuggestions', () => {
@@ -872,8 +952,8 @@ describe('AiAgent', () => {
         'Here is the second line of the answer.',
       ].join('\n');
       const parsed = agent.parseTextResponseForSuggestions(responseText);
-      assert.strictEqual(
-          parsed.answer, 'Here is the first line of the answer.\nHere is the second line of the answer.');
+      assert.strictEqual(parsed.answer,
+                         'Here is the first line of the answer.\nHere is the second line of the answer.');
       assert.deepEqual(parsed.suggestions, ['suggestion 1', 'suggestion 2']);
     });
 
@@ -890,6 +970,15 @@ describe('AiAgent', () => {
       const parsed = agent.parseTextResponseForSuggestions(responseText);
       assert.strictEqual(parsed.answer, 'Answer text.\nMore answer text.');
       assert.deepEqual(parsed.suggestions, ['second suggestion']);
+    });
+
+    it('should hide a partially streamed suggestions line whose text contains a closing bracket', () => {
+      const agent = new AiAgentMock({
+        aidaClient: mockAidaClient(),
+      });
+      const parsed = agent.parseTextResponseForSuggestions('SUGGESTIONS: ["Why does [type=text] fail?", "Ano');
+      assert.strictEqual(parsed.answer, '');
+      assert.isUndefined(parsed.suggestions);
     });
   });
 });

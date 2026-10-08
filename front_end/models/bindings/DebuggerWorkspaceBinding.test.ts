@@ -11,9 +11,13 @@ import type * as Protocol from '../../generated/protocol.js';
 import {setupLocaleHooks} from '../../testing/LocaleHelpers.js';
 import {MockDebuggerBackend} from '../../testing/MockScopeChain.js';
 import {setupRuntimeHooks} from '../../testing/RuntimeHelpers.js';
+import {encodeSourceMap} from '../../testing/SourceMapEncoder.js';
 import {protocolCallFrame, stringifyStackTrace} from '../../testing/StackTraceHelpers.js';
 import {TestUniverse} from '../../testing/TestUniverse.js';
 import * as Formatter from '../formatter/formatter.js';
+import * as StackTrace from '../stack_trace/stack_trace.js';
+// eslint-disable-next-line @devtools/es-modules-import
+import type * as StackTraceImpl from '../stack_trace/stack_trace_impl.js';
 
 import * as Bindings from './bindings.js';
 
@@ -101,6 +105,41 @@ describe('DebuggerWorkspaceBinding', () => {
     assert.strictEqual(sourceMap.findOriginalFunctionName({line: 0, column: 110}), 'foo');
   });
 
+  it('re-translates existing stack traces after DebuggerWorkspaceBindings.setFunctionRanges', async () => {
+    const backend = new MockDebuggerBackend();
+    const {debuggerWorkspaceBinding} = backend.universe;
+    const target =
+        backend.createTarget({id: 'main' as Protocol.Target.TargetID, name: 'main', type: SDK.Target.Type.FRAME});
+    const debuggerModel = target.model(SDK.DebuggerModel.DebuggerModel);
+    assert.exists(debuggerModel);
+
+    //                                                   10        20        30        40
+    //                                         0123456789012345678901234567890123456789012345678
+    const script = await backend.addScript(
+        target, {url: urlString`file://main.js`, content: 'function n(){o("hi")}function o(n){debugger}n();'}, {
+          url: 'file://gen.js.map/',
+          content: encodeSourceMap(['0:0 => main.js:0:0', '0:35 => main.js:5:2']),
+        });
+    const sourceMap = await debuggerModel.sourceMapManager().sourceMapForClientPromise(script);
+    assert.exists(sourceMap);
+    const uiSourceCodeForSourceMap = backend.universe.workspace.uiSourceCodeForURL(sourceMap.sourceURLs()[0]);
+    assert.exists(uiSourceCodeForSourceMap);
+
+    // Translated before the extension provides function ranges: the name comes from the AST-derived scopes.
+    const stackTrace = await debuggerWorkspaceBinding.createStackTraceFromProtocolRuntime(
+        {callFrames: [protocolCallFrame(`${script.sourceURL}:${script.scriptId}:o:0:35`)]}, target);
+    assert.strictEqual(stackTrace.syncFragment.frames[0].name, 'o');
+    const updatedSpy = sinon.spy();
+    stackTrace.addEventListener(StackTrace.StackTrace.Events.UPDATED, updatedSpy);
+
+    debuggerWorkspaceBinding.setFunctionRanges(
+        uiSourceCodeForSourceMap, [{start: {line: 0, column: 0}, end: {line: 10, column: 1}, name: 'foo'}]);
+    await debuggerWorkspaceBinding.pendingLiveLocationChangesPromise();
+
+    sinon.assert.calledOnce(updatedSpy);
+    assert.strictEqual(stackTrace.syncFragment.frames[0].name, 'foo');
+  });
+
   describe('createStackTraceFromProtocolRuntime', () => {
     it('identity translates frames by default', async () => {
       const universe = new TestUniverse();
@@ -147,7 +186,7 @@ describe('DebuggerWorkspaceBinding', () => {
       const universe = new TestUniverse();
       const target =
           universe.createTarget({id: 'main' as Protocol.Target.TargetID, name: 'main', type: SDK.Target.Type.FRAME});
-      const spy = sinon.spy(universe.debuggerWorkspaceBinding.pluginManager, 'translateRawFramesStep');
+      const spy = sinon.spy(universe.debuggerWorkspaceBinding.pluginManager, 'translateRawFrame');
 
       await universe.debuggerWorkspaceBinding.createStackTraceFromProtocolRuntime({
         callFrames: [
@@ -194,6 +233,63 @@ describe('DebuggerWorkspaceBinding', () => {
       assert.strictEqual(stackTrace.syncFragment.frames[0].uiSourceCode, uiSourceCode);
       assert.strictEqual(stackTrace.syncFragment.frames[1].uiSourceCode, uiSourceCode);
       assert.strictEqual(stackTrace.syncFragment.frames[2].uiSourceCode, uiSourceCode);
+    });
+
+    describe('isUnmapped', () => {
+      function isUnmapped(stackTrace: StackTrace.StackTrace.StackTrace): boolean[] {
+        const fragment = stackTrace.syncFragment as StackTraceImpl.StackTraceImpl.FragmentImpl;
+        return [...fragment.node?.getCallStack() ?? []].map(node => node.isUnmapped);
+      }
+
+      function setup() {
+        const backend = new MockDebuggerBackend();
+        const target =
+            backend.createTarget({id: 'main' as Protocol.Target.TargetID, name: 'main', type: SDK.Target.Type.FRAME});
+        return {backend, target, debuggerWorkspaceBinding: backend.universe.debuggerWorkspaceBinding};
+      }
+
+      it('is true for frames of scripts without source map and for builtins', async () => {
+        const {backend, target, debuggerWorkspaceBinding} = setup();
+        const script =
+            await backend.addScript(target, {url: urlString`http://example.com/foo.js`, content: 'foo'}, null);
+
+        const stackTrace = await debuggerWorkspaceBinding.createStackTraceFromProtocolRuntime(
+            {callFrames: [`${script.sourceURL}:${script.scriptId}:foo:0:0`, '::forEach::'].map(protocolCallFrame)},
+            target);
+
+        assert.deepEqual(isUnmapped(stackTrace), [true, true]);
+      });
+
+      it('is true for frames of scripts whose source map is still loading', async () => {
+        const {backend, target, debuggerWorkspaceBinding} = setup();
+        sinon.stub(backend.universe.pageResourceLoader, 'loadResource').returns(new Promise(() => {}));
+        const url = urlString`http://example.com/foo.js`;
+        // Doesn't resolve, as the source map never loads.
+        void backend.addScript(target, {url, content: 'foo'}, {url: 'http://example.com/foo.js.map', content: ''});
+        const script = target.model(SDK.DebuggerModel.DebuggerModel)?.scripts().find(s => s.sourceURL === url);
+        assert.exists(script);
+
+        const stackTrace = await debuggerWorkspaceBinding.createStackTraceFromProtocolRuntime(
+            {callFrames: [protocolCallFrame(`${url}:${script.scriptId}:foo:0:0`)]}, target);
+
+        assert.deepEqual(isUnmapped(stackTrace), [true]);
+        assert.strictEqual(stackTrace.syncFragment.frames[0].uiSourceCode?.url(), `${url}:sourcemap`);
+      });
+
+      it('is false for source-mapped frames that fall back to the default translation', async () => {
+        const {backend, target, debuggerWorkspaceBinding} = setup();
+        sinon.stub(Bindings.CompilerScriptMapping.CompilerScriptMapping.prototype, 'translateRawFrame').resolves(null);
+        const script = await backend.addScript(target, {url: urlString`http://example.com/foo.js`, content: 'foo'}, {
+          url: 'http://example.com/foo.js.map',
+          content: {version: 3, sources: ['foo.ts'], mappings: 'AAAA', names: []},
+        });
+
+        const stackTrace = await debuggerWorkspaceBinding.createStackTraceFromProtocolRuntime(
+            {callFrames: [protocolCallFrame(`${script.sourceURL}:${script.scriptId}:foo:0:0`)]}, target);
+
+        assert.deepEqual(isUnmapped(stackTrace), [false]);
+        assert.strictEqual(stackTrace.syncFragment.frames[0].uiSourceCode?.url(), 'http://example.com/foo.ts');
+      });
     });
   });
 });

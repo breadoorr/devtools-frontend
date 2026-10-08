@@ -319,7 +319,7 @@ export class DOMNode extends Common.ObjectWrapper.ObjectWrapper<DOMNodeEventType
 
     const frameOwnerTags = new Set(['EMBED', 'IFRAME', 'OBJECT', 'FENCEDFRAME']);
     if (payload.contentDocument) {
-      this.contentDocumentInternal = new DOMDocument(this.#domModel, payload.contentDocument);
+      this.contentDocumentInternal = new DOMDocument(this.#domModel, payload.contentDocument, payload.frameId);
       this.contentDocumentInternal.parentNode = this;
       this.childrenInternal = [];
     } else if (payload.frameId && frameOwnerTags.has(payload.nodeName)) {
@@ -1100,8 +1100,9 @@ export class DOMNode extends Common.ObjectWrapper.ObjectWrapper<DOMNodeEventType
    */
   async toggleHideElement(): Promise<void> {
     let pseudoElementName = this.pseudoType() ? this.nodeName() : null;
-    if (pseudoElementName && this.pseudoIdentifier()) {
-      pseudoElementName += `(${this.pseudoIdentifier()})`;
+    const pseudoIdentifier = this.pseudoIdentifier();
+    if (pseudoElementName && pseudoIdentifier) {
+      pseudoElementName += `(${cssEscape(pseudoIdentifier)})`;
     }
 
     let effectiveNode: DOMNode|null = this;
@@ -1139,7 +1140,7 @@ export class DOMNode extends Common.ObjectWrapper.ObjectWrapper<DOMNodeEventType
   }
 
   isCustomElement(): boolean {
-    if (this.nodeType() !== NodeType.ELEMENT_NODE || this.isXMLNode()) {
+    if (this.nodeType() !== NodeType.ELEMENT_NODE || this.isXMLNode() || Boolean(this.pseudoType())) {
       return false;
     }
     const localName = this.localName() || this.nodeName().toLowerCase();
@@ -1358,8 +1359,9 @@ export class DOMNode extends Common.ObjectWrapper.ObjectWrapper<DOMNodeEventType
       const classList = classes.trim().split(/\s+/g);
       return (lowerCaseName === 'div' ? '' : lowerCaseName) + '.' + classList.map(cls => cssEscape(cls)).join('.');
     }
-    if (this.pseudoIdentifier()) {
-      return `${lowerCaseName}(${this.pseudoIdentifier()})`;
+    const pseudoIdentifier = this.pseudoIdentifier();
+    if (pseudoIdentifier) {
+      return `${lowerCaseName}(${cssEscape(pseudoIdentifier)})`;
     }
     return lowerCaseName;
   }
@@ -1391,17 +1393,27 @@ export class DOMNode extends Common.ObjectWrapper.ObjectWrapper<DOMNodeEventType
   }
 
   async takeSnapshot(ownerDocumentSnapshot?: DOMDocument): Promise<DOMNode> {
-    const snapshot = (this instanceof DOMDocument) ? new DOMDocumentSnapshot(this.domModel(), {
-      nodeId: this.id,
-      backendNodeId: this.backendNodeId(),
-      nodeType: this.nodeType(),
-      nodeName: this.nodeName(),
-      localName: this.localName(),
-      nodeValue: this.nodeValueInternal,
-      documentURL: this.documentURL,
-      baseURL: this.baseURL,
-    } as Protocol.DOM.Node) :
-                                                     new DOMNodeSnapshot(this.domModel());
+    let snapshot: DOMNode;
+    if (this instanceof DOMDocument) {
+      const doc: DOMDocument = this;
+      snapshot = new DOMDocumentSnapshot(
+          this.domModel(),
+          {
+            nodeId: this.id,
+            backendNodeId: this.backendNodeId(),
+            nodeType: this.nodeType(),
+            nodeName: this.nodeName(),
+            localName: this.localName(),
+            nodeValue: this.nodeValueInternal,
+            documentURL: this.documentURL,
+            baseURL: this.baseURL,
+          } as Protocol.DOM.Node,
+          this.frameId(),
+          doc.securityOrigin(),
+      );
+    } else {
+      snapshot = new DOMNodeSnapshot(this.domModel());
+    }
     snapshot.id = this.id;
     snapshot.#backendNodeId = this.#backendNodeId;
     snapshot.#frameOwnerFrameId = this.#frameOwnerFrameId;
@@ -1573,16 +1585,35 @@ export class DOMDocument extends DOMNode {
   documentElement: DOMNode|null;
   #documentURL: Platform.DevToolsPath.UrlString;
   #baseURL: Platform.DevToolsPath.UrlString;
+  #frameId: Protocol.Page.FrameId|null;
   #securityOrigin: SecurityOrigin;
 
-  constructor(domModel: DOMModel, payload: Protocol.DOM.Node) {
+  constructor(
+      domModel: DOMModel,
+      payload: Protocol.DOM.Node,
+      frameId?: Protocol.Page.FrameId|null,
+  ) {
     super(domModel);
     this.body = null;
     this.documentElement = null;
     this.init(this, false, payload);
     this.#documentURL = (payload.documentURL || '') as Platform.DevToolsPath.UrlString;
     this.#baseURL = (payload.baseURL || '') as Platform.DevToolsPath.UrlString;
-    this.#securityOrigin = SecurityOrigin.create(this.#documentURL);
+    this.#frameId = frameId ?? null;
+
+    const resourceTreeModel = this.domModel().target().model(ResourceTreeModel);
+    const frame = this.#frameId ? resourceTreeModel?.frameForId(this.#frameId) : null;
+    if (frame) {
+      this.#securityOrigin = frame.securityOrigin();
+    } else if (resourceTreeModel?.mainFrame) {
+      // If the target has an active frame tree, a DOMDocument without a matching
+      // frame is a detached document and must be isolated with an opaque origin.
+      this.#securityOrigin = SecurityOrigin.createUniqueOpaque();
+    } else {
+      // TODO(b/567434846): Migrate synthetic unit tests to attach frames so this
+      // fallback to parsing documentURL can be removed.
+      this.#securityOrigin = SecurityOrigin.create(this.#documentURL);
+    }
   }
 
   get documentURL(): Platform.DevToolsPath.UrlString {
@@ -1593,10 +1624,14 @@ export class DOMDocument extends DOMNode {
     return this.#baseURL;
   }
 
+  override frameId(): Protocol.Page.FrameId|null {
+    return this.#frameId;
+  }
+
   /**
    * Returns the security origin of this document.
    *
-   * The security origin is derived from the document URL and is recomputed
+   * The security origin is resolved from the document's frame and is recomputed
    * when the document navigates to a new URL via `setDocumentURL`.
    */
   override securityOrigin(): SecurityOrigin {
@@ -1604,12 +1639,14 @@ export class DOMDocument extends DOMNode {
   }
 
   /**
-   * Updates the document and base URLs, and recomputes the document's security origin.
+   * Updates the document and base URLs, and updates the document's security origin.
    */
-  setDocumentURL(url: Platform.DevToolsPath.UrlString): void {
+  setDocumentURL(url: Platform.DevToolsPath.UrlString, securityOrigin?: SecurityOrigin|null): void {
     this.#documentURL = url;
     this.#baseURL = url;
-    this.#securityOrigin = SecurityOrigin.create(url);
+    // Prefer the canonical security origin from the frame, falling back to creating
+    // an origin from the URL as a last resort for test environments.
+    this.#securityOrigin = securityOrigin ?? SecurityOrigin.create(url);
   }
 }
 
@@ -1695,7 +1732,7 @@ export class DOMModel extends SDKModel<EventTypes> {
     if (node) {
       const contentDocument = node.contentDocument();
       if (contentDocument && contentDocument.documentURL !== frame.url) {
-        contentDocument.setDocumentURL(frame.url);
+        contentDocument.setDocumentURL(frame.url, frame.securityOrigin());
         this.dispatchEventToListeners(Events.DocumentURLChanged, contentDocument);
       }
     }
@@ -1879,7 +1916,8 @@ export class DOMModel extends SDKModel<EventTypes> {
     this.idToDOMNode = new Map();
     this.frameIdToOwnerNode = new Map();
     if (payload && 'nodeId' in payload) {
-      this.#document = new DOMDocument(this, payload);
+      const mainFrameId = this.target().model(ResourceTreeModel)?.mainFrame?.id;
+      this.#document = new DOMDocument(this, payload, mainFrameId);
     } else {
       this.#document = null;
     }
@@ -2543,6 +2581,22 @@ export class DOMNodeSnapshot extends DOMNode {
 }
 
 export class DOMDocumentSnapshot extends DOMDocument {
+  readonly #snapshotSecurityOrigin: SecurityOrigin;
+
+  constructor(
+      domModel: DOMModel,
+      payload: Protocol.DOM.Node,
+      frameId: Protocol.Page.FrameId|null|undefined,
+      securityOrigin: SecurityOrigin,
+  ) {
+    super(domModel, payload, frameId);
+    this.#snapshotSecurityOrigin = securityOrigin;
+  }
+
+  override securityOrigin(): SecurityOrigin {
+    return this.#snapshotSecurityOrigin;
+  }
+
   override init(
       _doc: DOMDocument|null, _isInShadowTree: boolean, _payload: Protocol.DOM.Node,
       _retainedNodes?: Set<Protocol.DOM.BackendNodeId>|undefined): void {

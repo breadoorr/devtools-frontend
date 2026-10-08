@@ -43,6 +43,14 @@ describe('NameResolver', () => {
     sinon.restore();
   });
 
+  /** Resolves the function name at the start of `callFrame`'s local scope, i.e. where V8 reports a function's location. */
+  async function resolveFunctionNameAtScopeStart(callFrame: SDK.DebuggerModel.CallFrame): Promise<string|null> {
+    const scopeStart = callFrame.localScope()?.range()?.start;
+    assert.exists(scopeStart);
+    return await SourceMapScopes.NamesResolver.resolveProfileFrameFunctionName(
+        scopeStart, target, backend.universe.debuggerWorkspaceBinding);
+  }
+
   // Given a function scope <fn-start>,<fn-end> and a nested scope <start>,<end>,
   // we expect the scope parser to return a list of identifiers of the form [{name, offset}]
   // for the nested scope. (The nested scope may be the same as the function scope.)
@@ -413,9 +421,8 @@ describe('NameResolver', () => {
           target, {url: URL, content: source}, scopes, {url: sourceMapUrl, content: sourceMapContent}, [scopeObject]);
     });
 
-    it('resolves function names at scope start for a debugger frame', async () => {
-      const functionName = await SourceMapScopes.NamesResolver.resolveDebuggerFrameFunctionName(callFrame);
-      assert.strictEqual(functionName, 'unminified');
+    it('resolves function names at scope start', async () => {
+      assert.strictEqual(await resolveFunctionNameAtScopeStart(callFrame), 'unminified');
     });
 
     it('resolves function names at scope start for a profiler frame', async () => {
@@ -463,8 +470,7 @@ describe('NameResolver', () => {
           target, {url: URL, content: source + `//# sourceMappingURL=${sourceMapUrl}`}, scopes,
           {url: sourceMapUrl, content: sourceMapContent});
 
-      const functionName = await SourceMapScopes.NamesResolver.resolveDebuggerFrameFunctionName(callFrame);
-      assert.strictEqual(functionName, 'main');
+      assert.strictEqual(await resolveFunctionNameAtScopeStart(callFrame), 'main');
     });
   });
 
@@ -486,7 +492,7 @@ describe('NameResolver', () => {
     const callFrame = await backend.createCallFrame(
         target, {url: URL, content: source}, scopes, {url: sourceMapUrl, content: sourceMapContent}, [scopeObject]);
 
-    assert.isNull(await SourceMapScopes.NamesResolver.resolveDebuggerFrameFunctionName(callFrame));
+    assert.isNull(await resolveFunctionNameAtScopeStart(callFrame));
   });
 
   describe('allVariablesAtPosition', () => {
@@ -617,63 +623,16 @@ function mulWithOffset(param1, param2, offset) {
   });
 
   describe('resolveScopeChain', () => {
-    it('omits empty scopes in the fallback chain', async () => {
-      const sourceMapUrl = 'file:///tmp/example.js.min.map';
-      const sourceMap = encodeSourceMap([
-        '0:0 => index.js:0:0',
-        '0:11 => index.js:0:11@par1',
-      ]);
-      const sourceMapContent = JSON.stringify(sourceMap);
-
-      const source = `function f(o){{}console.log(o)}f(1);\n//# sourceMappingURL=${sourceMapUrl}`;
-      const scopes = '          {   < >              }';
-
-      const emptyObject = backend.createSimpleRemoteObject([]);
-      const scopeObject = backend.createSimpleRemoteObject([{name: 'o', value: 1}]);
-      const callFrame = await backend.createCallFrame(target, {url: URL, content: source}, scopes,
-                                                      {url: sourceMapUrl, content: sourceMapContent},
-                                                      [emptyObject, scopeObject], /* emptyScopes */[true, false]);
-
-      assert.lengthOf(callFrame.scopeChain(), 2);
-      assert.isTrue(callFrame.scopeChain()[0].empty());
-      assert.isFalse(callFrame.scopeChain()[1].empty());
-
-      const resolvedScopeChain =
-          await SourceMapScopes.NamesResolver.resolveScopeChain(callFrame, backend.universe.debuggerWorkspaceBinding);
-
-      assert.lengthOf(resolvedScopeChain, 1);
-      assert.strictEqual(resolvedScopeChain[0].type(), Protocol.Debugger.ScopeType.Local);
-    });
-
-    it('retains empty Local scope in the fallback chain', async () => {
-      const source = 'function f() { {} }';
-      const scopes = '          {   < >}';
-
-      const emptyObject = backend.createSimpleRemoteObject([]);
-      const callFrame = await backend.createCallFrame(target, {url: URL, content: source}, scopes, null,
-                                                      [emptyObject, emptyObject], /* emptyScopes */[true, true]);
-
-      assert.lengthOf(callFrame.scopeChain(), 2);
-      assert.isTrue(callFrame.scopeChain()[0].empty());
-      assert.strictEqual(callFrame.scopeChain()[0].type(), Protocol.Debugger.ScopeType.Block);
-      assert.isTrue(callFrame.scopeChain()[1].empty());
-      assert.strictEqual(callFrame.scopeChain()[1].type(), Protocol.Debugger.ScopeType.Local);
-
-      const resolvedScopeChain =
-          await SourceMapScopes.NamesResolver.resolveScopeChain(callFrame, backend.universe.debuggerWorkspaceBinding);
-
-      assert.lengthOf(resolvedScopeChain, 1);
-      assert.strictEqual(resolvedScopeChain[0].type(), Protocol.Debugger.ScopeType.Local);
-    });
-
     it('respects the hostConfig.devToolsSourceMapScopesInSourcesPanel flag gate', async () => {
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 0,
                       {kind: 'function', name: 'authoredFn', isStackFrame: true, variables: ['mappedVar'], key: 'fn'})
           .endScope(0, 30)
-          .endScope(0, 30);
+          .endScope(0, 30)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 0, {scopeKey: 'fn', isStackFrame: true, values: ['o']})
           .endRange(0, 30)
@@ -707,10 +666,12 @@ function mulWithOffset(param1, param2, offset) {
       updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 0, {kind: 'function', name: 'lazyFn', isStackFrame: true, variables: ['lazyVar'], key: 'fn'})
           .endScope(0, 30)
-          .endScope(0, 30);
+          .endScope(0, 30)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 0, {scopeKey: 'fn', isStackFrame: true, values: ['o']})
           .endRange(0, 30)
@@ -746,10 +707,12 @@ function mulWithOffset(param1, param2, offset) {
          updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
          const sourceMapUrl = 'file:///tmp/example.js.min.map';
          const builder = new ScopesCodec.ScopeInfoBuilder();
-         builder.startScope(0, 0, {kind: 'global', key: 'global'})
+         builder.startSource()
+             .startScope(0, 0, {kind: 'global', key: 'global'})
              .startScope(0, 0, {kind: 'function', name: 'onlyNameNoVars', isStackFrame: true, key: 'fn'})
              .endScope(0, 30)
-             .endScope(0, 30);
+             .endScope(0, 30)
+             .endSource();
          builder.startRange(0, 0, {scopeKey: 'global'})
              .startRange(0, 0, {scopeKey: 'fn', isStackFrame: true})
              .endRange(0, 30)
@@ -773,61 +736,171 @@ function mulWithOffset(param1, param2, offset) {
          assert.isDefined(mappedProp);
          assert.strictEqual(mappedProp?.value?.value, 123);
        });
-  });
 
-  describe('resolveThisObject', () => {
-    it('ignores innermost empty block scopes and resolves this from the enclosing non-empty function scope',
-       async () => {
-         const sourceMapUrl = 'file:///tmp/example.js.min.map';
-         const sourceMap = encodeSourceMap([
-           '0:0 => index.js:0:0',
-           '1:2 => index.js:1:2',
-           '2:9 => index.js:2:9@this',
-         ]);
-         const sourceMapContent = JSON.stringify(sourceMap);
+    it('omits scopes with an emptyReason in the legacy chain', async () => {
+      const sourceMapUrl = 'file:///tmp/example.js.min.map';
+      const sourceMap = encodeSourceMap([
+        '0:0 => index.js:0:0',
+        '0:11 => index.js:0:11@par1',
+      ]);
+      const sourceMapContent = JSON.stringify(sourceMap);
 
-         const source = [
-           'function f() {',
-           '  {}',
-           '  return _this;',
-           '}',
-           `//# sourceMappingURL=${sourceMapUrl}`,
-         ].join('\n');
-         const scopes = [
-           '          {',
-           '  <>',
-           '',
-           '}',
-         ].join('\n');
+      const source = `function f(o){{}console.log(o)}f(1);\n//# sourceMappingURL=${sourceMapUrl}`;
+      const scopes = '          {   < >              }';
 
-         const expectedThis = {
-           type: Protocol.Runtime.RemoteObjectType.Object,
-           description: 'resolved-this',
-         } as Protocol.Runtime.RemoteObject;
-         backend.cdpConnection.setSuccessHandler('Debugger.evaluateOnCallFrame', request => {
-           assert.strictEqual(request.expression, '_this');
-           return {result: expectedThis};
-         });
+      const emptyObject = backend.createSimpleRemoteObject([]);
+      const scopeObject = backend.createSimpleRemoteObject([{name: 'o', value: 1}]);
+      const callFrame = await backend.createCallFrame(
+          target, {url: URL, content: source}, scopes, {url: sourceMapUrl, content: sourceMapContent},
+          [emptyObject, scopeObject], [Protocol.Debugger.ScopeEmptyReason.NoVariables, undefined]);
 
-         const emptyObject = backend.createSimpleRemoteObject([]);
-         const functionScopeObject = backend.createSimpleRemoteObject([]);
-         const callFrame = await backend.createCallFrame(
-             target, {url: URL, content: source}, scopes, {url: sourceMapUrl, content: sourceMapContent},
-             [emptyObject, functionScopeObject], /* emptyScopes */[true, false]);
+      assert.lengthOf(callFrame.scopeChain(), 2);
 
-         const resolvedThis = await SourceMapScopes.NamesResolver.resolveThisObject(
-             callFrame, backend.universe.debuggerWorkspaceBinding);
+      const resolvedScopeChain =
+          await SourceMapScopes.NamesResolver.resolveScopeChain(callFrame, backend.universe.debuggerWorkspaceBinding);
 
-         assert.strictEqual(resolvedThis?.description, 'resolved-this');
-       });
+      assert.lengthOf(resolvedScopeChain, 1);
+      assert.strictEqual(resolvedScopeChain[0].type(), Protocol.Debugger.ScopeType.Local);
+    });
 
-    it('falls back to callFrame.thisObject() when all scopes are empty', async () => {
+    it('omits scopes where all variables are unavailable in the legacy chain', async () => {
+      const source = 'function outer() { function inner() { {} } }';
+      const scopes = '                 [                  { <> } ]';
+
+      const callFrame = await backend.createCallFrame(target, {url: URL, content: source}, scopes, null, [], [
+        Protocol.Debugger.ScopeEmptyReason.AllUnavailable,
+        undefined,
+        Protocol.Debugger.ScopeEmptyReason.AllUnavailable,
+      ]);
+
+      assert.lengthOf(callFrame.scopeChain(), 3);
+
+      const resolvedScopeChain =
+          await SourceMapScopes.NamesResolver.resolveScopeChain(callFrame, backend.universe.debuggerWorkspaceBinding);
+
+      assert.lengthOf(resolvedScopeChain, 1);
+      assert.strictEqual(resolvedScopeChain[0].type(), Protocol.Debugger.ScopeType.Local);
+    });
+
+    it('retains the Local scope in the legacy chain even if it has an emptyReason', async () => {
       const source = 'function f() { {} }';
       const scopes = '          {   < >}';
 
-      const emptyObject = backend.createSimpleRemoteObject([]);
-      const callFrame = await backend.createCallFrame(target, {url: URL, content: source}, scopes, null,
-                                                      [emptyObject, emptyObject], /* emptyScopes */[true, true]);
+      const callFrame = await backend.createCallFrame(
+          target, {url: URL, content: source}, scopes, null, [],
+          [Protocol.Debugger.ScopeEmptyReason.NoVariables, Protocol.Debugger.ScopeEmptyReason.NoVariables]);
+
+      assert.lengthOf(callFrame.scopeChain(), 2);
+      assert.strictEqual(callFrame.scopeChain()[0].type(), Protocol.Debugger.ScopeType.Block);
+      assert.strictEqual(callFrame.scopeChain()[1].type(), Protocol.Debugger.ScopeType.Local);
+
+      const resolvedScopeChain =
+          await SourceMapScopes.NamesResolver.resolveScopeChain(callFrame, backend.universe.debuggerWorkspaceBinding);
+
+      assert.lengthOf(resolvedScopeChain, 1);
+      assert.strictEqual(resolvedScopeChain[0].type(), Protocol.Debugger.ScopeType.Local);
+    });
+
+    function createProtocolScope(type: Protocol.Debugger.ScopeType,
+                                 emptyReason?: Protocol.Debugger.ScopeEmptyReason): Protocol.Debugger.Scope {
+      return {type, object: {type: Protocol.Runtime.RemoteObjectType.Object}, emptyReason};
+    }
+
+    async function createCallFrameWithScopes(scopeChain: Protocol.Debugger.Scope[]):
+        Promise<SDK.DebuggerModel.CallFrame> {
+      const script = await backend.addScript(target, {url: URL, content: 'export const x = 1;'}, null);
+      const payload: Protocol.Debugger.CallFrame = {
+        callFrameId: '0' as Protocol.Debugger.CallFrameId,
+        functionName: '',
+        location: {scriptId: script.scriptId, lineNumber: 0, columnNumber: 0},
+        url: script.sourceURL,
+        scopeChain,
+        this: {type: Protocol.Runtime.RemoteObjectType.Undefined},
+        canBeRestarted: false,
+      };
+      return new SDK.DebuggerModel.CallFrame(script.debuggerModel, script, payload, 0);
+    }
+
+    it('retains an empty Module scope in the legacy chain when paused at the module top-level', async () => {
+      const callFrame = await createCallFrameWithScopes([
+        createProtocolScope(Protocol.Debugger.ScopeType.Module, Protocol.Debugger.ScopeEmptyReason.AllUnavailable),
+        createProtocolScope(Protocol.Debugger.ScopeType.Global),
+      ]);
+      assert.isNull(callFrame.localScope());
+
+      const resolvedScopeChain =
+          await SourceMapScopes.NamesResolver.resolveScopeChain(callFrame, backend.universe.debuggerWorkspaceBinding);
+
+      assert.deepEqual(resolvedScopeChain.map(scope => scope.type()),
+                       [Protocol.Debugger.ScopeType.Module, Protocol.Debugger.ScopeType.Global]);
+    });
+
+    it('omits an empty Module scope in the legacy chain when paused inside a function', async () => {
+      const callFrame = await createCallFrameWithScopes([
+        createProtocolScope(Protocol.Debugger.ScopeType.Local),
+        createProtocolScope(Protocol.Debugger.ScopeType.Module, Protocol.Debugger.ScopeEmptyReason.NoVariables),
+        createProtocolScope(Protocol.Debugger.ScopeType.Global),
+      ]);
+      assert.isNotNull(callFrame.localScope());
+
+      const resolvedScopeChain =
+          await SourceMapScopes.NamesResolver.resolveScopeChain(callFrame, backend.universe.debuggerWorkspaceBinding);
+
+      assert.deepEqual(resolvedScopeChain.map(scope => scope.type()),
+                       [Protocol.Debugger.ScopeType.Local, Protocol.Debugger.ScopeType.Global]);
+    });
+  });
+
+  describe('resolveThisObject', () => {
+    it('ignores innermost empty block scopes and resolves this from the enclosing function scope', async () => {
+      const sourceMapUrl = 'file:///tmp/example.js.min.map';
+      const sourceMap = encodeSourceMap([
+        '0:0 => index.js:0:0',
+        '1:2 => index.js:1:2',
+        '2:9 => index.js:2:9@this',
+      ]);
+      const sourceMapContent = JSON.stringify(sourceMap);
+
+      const source = [
+        'function f() {',
+        '  {}',
+        '  return _this;',
+        '}',
+        `//# sourceMappingURL=${sourceMapUrl}`,
+      ].join('\n');
+      const scopes = [
+        '          {',
+        '  <>',
+        '',
+        '}',
+      ].join('\n');
+
+      const expectedThis = {
+        type: Protocol.Runtime.RemoteObjectType.Object,
+        description: 'resolved-this',
+      } as Protocol.Runtime.RemoteObject;
+      backend.cdpConnection.setSuccessHandler('Debugger.evaluateOnCallFrame', request => {
+        assert.strictEqual(request.expression, '_this');
+        return {result: expectedThis};
+      });
+
+      const callFrame = await backend.createCallFrame(target, {url: URL, content: source}, scopes,
+                                                      {url: sourceMapUrl, content: sourceMapContent}, [],
+                                                      [Protocol.Debugger.ScopeEmptyReason.NoVariables, undefined]);
+
+      const resolvedThis =
+          await SourceMapScopes.NamesResolver.resolveThisObject(callFrame, backend.universe.debuggerWorkspaceBinding);
+
+      assert.strictEqual(resolvedThis?.description, 'resolved-this');
+    });
+
+    it('falls back to callFrame.thisObject() when the Local scope has no this mapping', async () => {
+      const source = 'function f() { {} }';
+      const scopes = '          {   < >}';
+
+      const callFrame = await backend.createCallFrame(
+          target, {url: URL, content: source}, scopes, null, [],
+          [Protocol.Debugger.ScopeEmptyReason.NoVariables, Protocol.Debugger.ScopeEmptyReason.NoVariables]);
 
       const resolvedThis =
           await SourceMapScopes.NamesResolver.resolveThisObject(callFrame, backend.universe.debuggerWorkspaceBinding);
@@ -836,7 +909,7 @@ function mulWithOffset(param1, param2, offset) {
       assert.strictEqual(resolvedThis?.type, callFrame.thisObject()?.type);
     });
 
-    it('does not resolve this to the enclosing closure scope when paused in an empty inner function', async () => {
+    it('does not resolve this from the enclosing closure scope when paused in an empty inner function', async () => {
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const sourceMap = encodeSourceMap([
         '0:0 => index.js:0:0',
@@ -868,11 +941,9 @@ function mulWithOffset(param1, param2, offset) {
         assert.fail('Should not evaluate this on call frame for empty inner function');
       });
 
-      const emptyInnerObject = backend.createSimpleRemoteObject([]);
-      const outerScopeObject = backend.createSimpleRemoteObject([]);
-      const callFrame = await backend.createCallFrame(
-          target, {url: URL, content: source}, scopes, {url: sourceMapUrl, content: sourceMapContent},
-          [emptyInnerObject, outerScopeObject], /* emptyScopes */[true, false]);
+      const callFrame = await backend.createCallFrame(target, {url: URL, content: source}, scopes,
+                                                      {url: sourceMapUrl, content: sourceMapContent}, [],
+                                                      [Protocol.Debugger.ScopeEmptyReason.NoVariables, undefined]);
 
       const resolvedThis =
           await SourceMapScopes.NamesResolver.resolveThisObject(callFrame, backend.universe.debuggerWorkspaceBinding);
@@ -883,36 +954,11 @@ function mulWithOffset(param1, param2, offset) {
   });
 
   describe('allVariablesInCallFrame', () => {
-    it('produces correct mappings when empty scopes are in the chain', async () => {
-      const sourceMapUrl = 'file:///tmp/example.js.min.map';
-      const sourceMap = encodeSourceMap([
-        '0:0 => index.js:0:0',
-        '0:9 => index.js:0:9@f',
-        '0:11 => index.js:0:11@par1',
-        '0:16 => index.js:0:16',
-        '0:23 => index.js:0:23@par1',
-      ]);
-      const sourceMapContent = JSON.stringify(sourceMap);
-
-      const source = `function f(o){{}return o;}f(1);\n//# sourceMappingURL=${sourceMapUrl}`;
-      const scopes = '          {   < >        }';
-
-      const emptyObject = backend.createSimpleRemoteObject([]);
-      const scopeObject = backend.createSimpleRemoteObject([{name: 'o', value: 42}]);
-      const callFrame = await backend.createCallFrame(target, {url: URL, content: source}, scopes,
-                                                      {url: sourceMapUrl, content: sourceMapContent},
-                                                      [emptyObject, scopeObject], /* emptyScopes */[true, false]);
-
-      const variableMap = await SourceMapScopes.NamesResolver.allVariablesInCallFrame(
-          callFrame, backend.universe.debuggerWorkspaceBinding);
-
-      assert.deepEqual(variableMap, [{bindings: new Map<string, string|null>([['par1', 'o']]), generatedNames: ['o']}]);
-    });
-
     it('uses source map scope binding expressions when devToolsSourceMapScopesInSourcesPanel is enabled', async () => {
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 0, {
             kind: 'function',
             name: 'fn',
@@ -921,7 +967,8 @@ function mulWithOffset(param1, param2, offset) {
             key: 'fn',
           })
           .endScope(0, 40)
-          .endScope(0, 40);
+          .endScope(0, 40)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 0, {scopeKey: 'fn', isStackFrame: true, values: ['o', '_mod.imported', 'o + 1', '_this']})
           .endRange(0, 40)
@@ -964,10 +1011,12 @@ function mulWithOffset(param1, param2, offset) {
       updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['x', 'fnVar'], key: 'fn'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['x', 'fnVar'], key: 'fn'})
           .startScope(0, 14, {kind: 'block', variables: ['x', 'blockVar'], key: 'block'})
           .endScope(0, 28)
-          .endScope(0, 30);
+          .endScope(0, 30)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'fn', isStackFrame: true, values: ['fn_x', 'fn_v']})
           .startRange(0, 14, {scopeKey: 'block', values: ['block_x', 'block_v']})
           .endRange(0, 28)
@@ -995,10 +1044,12 @@ function mulWithOffset(param1, param2, offset) {
       updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['lazyVar'], key: 'fn'})
           .endScope(0, 30)
-          .endScope(0, 30);
+          .endScope(0, 30)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 0, {scopeKey: 'fn', isStackFrame: true, values: ['_lazy.val']})
           .endRange(0, 30)
@@ -1035,10 +1086,12 @@ function mulWithOffset(param1, param2, offset) {
       updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 0, {kind: 'function', name: 'onlyName', isStackFrame: true, key: 'fn'})
           .endScope(0, 30)
-          .endScope(0, 30);
+          .endScope(0, 30)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 0, {scopeKey: 'fn', isStackFrame: true})
           .endRange(0, 30)
@@ -1062,6 +1115,110 @@ function mulWithOffset(param1, param2, offset) {
           callFrame.location(), backend.universe.debuggerWorkspaceBinding);
       assert.strictEqual(posMap[0].bindings.get('legacyParam'), 'o');
     });
+
+    it('resolves variable mappings for virtual call frames of inlined functions', async () => {
+      updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
+      const sourceMapUrl = 'file:///tmp/example.js.min.map';
+      const builder = new ScopesCodec.ScopeInfoBuilder();
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['globalVar'], key: 'global'})
+          .startScope(1, 0, {kind: 'function', name: 'inner', isStackFrame: true, variables: ['x'], key: 'inner'})
+          .endScope(3, 0)
+          .startScope(5, 0, {kind: 'function', name: 'outer', isStackFrame: true, variables: ['x', 'y'], key: 'outer'})
+          .startScope(6, 0, {kind: 'block', variables: ['blockVar'], key: 'block'})
+          .endScope(8, 0)
+          .endScope(9, 0)
+          .endScope(12, 0)
+          .endSource();
+
+      builder.startRange(0, 0, {scopeKey: 'global', values: ['g']})
+          .startRange(0, 0, {
+            scopeKey: 'outer',
+            callSite: {sourceIndex: 0, line: 11, column: 0},
+            values: ['outer_x', 'outer_y'],
+          })
+          .startRange(0, 0, {scopeKey: 'block', values: ['b']})
+          .startRange(0, 0, {
+            scopeKey: 'inner',
+            callSite: {sourceIndex: 0, line: 7, column: 4},
+            values: ['inner_x'],
+          })
+          .endRange(0, 30)
+          .endRange(0, 30)
+          .endRange(0, 30)
+          .endRange(0, 30);
+
+      const baseMap = encodeSourceMap(['0:0 => index.js:0:0']);
+      const map = ScopesCodec.encode(builder.build(), baseMap as ScopesCodec.SourceMapJson);
+      const sourceMapContent = JSON.stringify(map);
+
+      const source = `function f(o){console.log(o)}f(1);\n//# sourceMappingURL=${sourceMapUrl}`;
+      const scopes = '          {  <             >}';
+      const scopeObject = backend.createSimpleRemoteObject([{name: 'o', value: 1}]);
+      const innerCallFrame = await backend.createCallFrame(
+          target, {url: URL, content: source}, scopes, {url: sourceMapUrl, content: sourceMapContent}, [scopeObject]);
+      const outerCallFrame = innerCallFrame.createVirtualCallFrame(1, 'outer');
+      const globalCallFrame = innerCallFrame.createVirtualCallFrame(2, '');
+
+      const expectedInnerMappings: Formatter.FormatterWorkerPool.ScopeVariableMapping[] = [
+        {bindings: new Map([['x', 'inner_x']]), generatedNames: []},
+        {bindings: new Map([['globalVar', 'g']]), generatedNames: []},
+      ];
+      assert.deepEqual(await SourceMapScopes.NamesResolver.allVariablesInCallFrame(
+                           innerCallFrame, backend.universe.debuggerWorkspaceBinding),
+                       expectedInnerMappings);
+      assert.deepEqual(await SourceMapScopes.NamesResolver.allVariablesAtPosition(
+                           innerCallFrame.location(), backend.universe.debuggerWorkspaceBinding),
+                       expectedInnerMappings);
+
+      const expectedOuterMappings: Formatter.FormatterWorkerPool.ScopeVariableMapping[] = [
+        {bindings: new Map([['blockVar', 'b']]), generatedNames: []},
+        {bindings: new Map([['x', 'outer_x'], ['y', 'outer_y']]), generatedNames: []},
+        {bindings: new Map([['globalVar', 'g']]), generatedNames: []},
+      ];
+      assert.deepEqual(await SourceMapScopes.NamesResolver.allVariablesInCallFrame(
+                           outerCallFrame, backend.universe.debuggerWorkspaceBinding),
+                       expectedOuterMappings);
+      assert.deepEqual(await SourceMapScopes.NamesResolver.allVariablesAtPosition(
+                           outerCallFrame.location(), backend.universe.debuggerWorkspaceBinding),
+                       expectedOuterMappings);
+
+      const expectedGlobalMappings: Formatter.FormatterWorkerPool.ScopeVariableMapping[] = [
+        {bindings: new Map([['globalVar', 'g']]), generatedNames: []},
+      ];
+      assert.deepEqual(await SourceMapScopes.NamesResolver.allVariablesInCallFrame(
+                           globalCallFrame, backend.universe.debuggerWorkspaceBinding),
+                       expectedGlobalMappings);
+      assert.deepEqual(await SourceMapScopes.NamesResolver.allVariablesAtPosition(
+                           globalCallFrame.location(), backend.universe.debuggerWorkspaceBinding),
+                       expectedGlobalMappings);
+    });
+
+    it('ignores scopes with an emptyReason in the legacy chain', async () => {
+      const sourceMapUrl = 'file:///tmp/example.js.min.map';
+      const sourceMap = encodeSourceMap([
+        '0:0 => index.js:0:0',
+        '0:9 => index.js:0:9@f',
+        '0:11 => index.js:0:11@par1',
+        '0:16 => index.js:0:16',
+        '0:23 => index.js:0:23@par1',
+      ]);
+      const sourceMapContent = JSON.stringify(sourceMap);
+
+      const source = `function f(o){{}return o;}f(1);\n//# sourceMappingURL=${sourceMapUrl}`;
+      const scopes = '          {   < >        }';
+
+      const emptyObject = backend.createSimpleRemoteObject([]);
+      const scopeObject = backend.createSimpleRemoteObject([{name: 'o', value: 42}]);
+      const callFrame = await backend.createCallFrame(
+          target, {url: URL, content: source}, scopes, {url: sourceMapUrl, content: sourceMapContent},
+          [emptyObject, scopeObject], [Protocol.Debugger.ScopeEmptyReason.NoVariables, undefined]);
+
+      const variableMap = await SourceMapScopes.NamesResolver.allVariablesInCallFrame(
+          callFrame, backend.universe.debuggerWorkspaceBinding);
+
+      assert.deepEqual(variableMap, [{bindings: new Map<string, string|null>([['par1', 'o']]), generatedNames: ['o']}]);
+    });
   });
 
   describe('allVariablesAtPosition with source map scopes', () => {
@@ -1069,10 +1226,12 @@ function mulWithOffset(param1, param2, offset) {
       updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
       const sourceMapUrl = 'file:///tmp/example.js.min.map';
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['origA', 'origB'], key: 'fn'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['origA', 'origB'], key: 'fn'})
           .startScope(1, 0, {kind: 'block', variables: ['innerA'], key: 'block'})
           .endScope(3, 0)
-          .endScope(5, 0);
+          .endScope(5, 0)
+          .endSource();
 
       // 0         1         2         3         4         5
       // 012345678901234567890123456789012345678901234567890123456
@@ -1134,14 +1293,16 @@ function mulWithOffset(param1, param2, offset) {
     it('resolves the scope chain and binding expressions from source map scopes', async () => {
       updateHostConfig({devToolsSourceMapScopesInSourcesPanel: {enabled: true}});
       const builder = new ScopesCodec.ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(
               0, 10,
               {kind: 'function', name: 'authoredFn', isStackFrame: true, variables: ['authoredParam'], key: 'fn'})
           .startScope(1, 2, {kind: 'block', variables: ['authoredLocal'], key: 'block'})
           .endScope(4, 3)
           .endScope(5, 1)
-          .endScope(7, 0);
+          .endScope(7, 0)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 10, {scopeKey: 'fn', isStackFrame: true, values: ['o']})
           .startRange(1, 2, {
@@ -1243,7 +1404,7 @@ function mulWithOffset(param1, param2, offset) {
       assert.strictEqual(mapping[0].bindings.get('par2'), 'n');
     });
 
-    it('resolves function names at scope start for debugger and profiler frames', async () => {
+    it('resolves function names at scope start and at the paused location', async () => {
       // This was minified with 'terser -m -o example.min.js --source-map "includeSources;url=example.min.js.map"' v5.7.0.
       const sourceMapContent = JSON.stringify({
         version: 3,
@@ -1259,7 +1420,7 @@ function mulWithOffset(param1, param2, offset) {
       const callFrame = await backend.createCallFrame(target, {...INLINE_SCRIPT, content: source}, scopes,
                                                       {url: sourceMapUrl, content: sourceMapContent});
 
-      assert.strictEqual(await SourceMapScopes.NamesResolver.resolveDebuggerFrameFunctionName(callFrame), 'unminified');
+      assert.strictEqual(await resolveFunctionNameAtScopeStart(callFrame), 'unminified');
 
       const {scriptId, lineNumber, columnNumber} = callFrame.location();
       assert.strictEqual(await SourceMapScopes.NamesResolver.resolveProfileFrameFunctionName(

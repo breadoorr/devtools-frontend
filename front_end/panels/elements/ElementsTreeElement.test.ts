@@ -133,6 +133,45 @@ describe('ElementsTreeElement', () => {
       assert.strictEqual(result.text, expected.text);
       assert.deepEqual(result.entityRanges, expected.entityRanges);
     });
+
+    // Mirrors the special characters from legacy elements/elements-panel-structure.
+    const entityCases: Array<[string, string]> = [
+      ['\u00A0', '&nbsp;'],
+      ['\u00AD', '&shy;'],
+      ['\u2002', '&ensp;'],
+      ['\u2003', '&emsp;'],
+      ['\u2009', '&thinsp;'],
+      ['\u200A', '&hairsp;'],
+      ['\u200B', '&ZeroWidthSpace;'],
+      ['\u200C', '&zwnj;'],
+      ['\u200D', '&zwj;'],
+      ['\u200E', '&lrm;'],
+      ['\u200F', '&rlm;'],
+      ['\u202A', '&#x202A;'],
+      ['\u202B', '&#x202B;'],
+      ['\u202C', '&#x202C;'],
+      ['\u202D', '&#x202D;'],
+      ['\u202E', '&#x202E;'],
+      ['\u2060', '&NoBreak;'],
+      ['\uFEFF', '&#xFEFF;'],
+    ];
+    for (const [char, entity] of entityCases) {
+      it(`converts U+${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')} to ${entity}`, () => {
+        const result = Elements.ElementsTreeElement.convertUnicodeCharsToHTMLEntities(`a${char}b`);
+        assert.strictEqual(result.text, `a${entity}b`);
+        assert.deepEqual(result.entityRanges, [new TextUtils.TextRange.SourceRange(1, entity.length)]);
+      });
+    }
+
+    it('converts the full legacy elements-panel-structure special character sequence', () => {
+      const input = ' ><"\' ' + entityCases.map(([char]) => char).join('_') + ' ';
+      const result = Elements.ElementsTreeElement.convertUnicodeCharsToHTMLEntities(input);
+      assert.strictEqual(
+          result.text,
+          ' ><"\' &nbsp;_&shy;_&ensp;_&emsp;_&thinsp;_&hairsp;_&ZeroWidthSpace;_&zwnj;_&zwj;_&lrm;_&rlm;_' +
+              '&#x202A;_&#x202B;_&#x202C;_&#x202D;_&#x202E;_&NoBreak;_&#xFEFF; ');
+      assert.lengthOf(result.entityRanges, entityCases.length);
+    });
   });
 
   it('renders gutter decorations correctly', async () => {
@@ -865,9 +904,8 @@ describeWithEnvironment('ElementsTreeElement', () => {
 
     function getLinkOutputs(treeElement: Elements.ElementsTreeElement.ElementsTreeElement):
         Array<{text: string, href: string}> {
-      const attributeValueElement = treeElement.widget.contentElement.querySelector('.webkit-html-attribute-value');
-      assert.exists(attributeValueElement);
-      const linkElements = Array.from(attributeValueElement.querySelectorAll('.devtools-link'));
+      const linkElements =
+          Array.from(treeElement.widget.contentElement.querySelectorAll('.webkit-html-attribute-value .devtools-link'));
       assert.isNotEmpty(linkElements, 'Expected to find .devtools-link elements');
 
       return linkElements.map(link => {
@@ -969,6 +1007,55 @@ describeWithEnvironment('ElementsTreeElement', () => {
 
       assert.lengthOf(links, 1);
       assert.deepEqual(links[0], {text: 'image.png', href: 'http://example.com/image.png'});
+    });
+
+    it('updates attributes when shifting between plain and linkified values without throwing', () => {
+      const nodePayload = {
+        nodeId: 1 as Protocol.DOM.NodeId,
+        backendNodeId: 2 as Protocol.DOM.BackendNodeId,
+        nodeType: Node.ELEMENT_NODE,
+        nodeName: 'SCRIPT',
+        localName: 'script',
+        nodeValue: '',
+        attributes: ['type', 'rocketlazyloadscript', 'src', 'app.js'],
+        childNodeCount: 0,
+      };
+      const node = SDK.DOMModel.DOMNode.create(domModel, null, false, nodePayload);
+      sinon.stub(node, 'resolveURL').callsFake(url => Platform.DevToolsPath.urlString`http://example.com/${url}`);
+
+      const treeElement = renderTreeNode(node);
+      assert.deepEqual(getLinkOutputs(treeElement), [{text: 'app.js', href: 'http://example.com/app.js'}]);
+
+      // Removing 'type' shifts 'src' into the first attribute slot (previously ValueType.UNKNOWN).
+      domModel.attributeRemoved(node.id, 'type');
+      treeElement.updateTitle();
+      assert.deepEqual(getLinkOutputs(treeElement), [{text: 'app.js', href: 'http://example.com/app.js'}]);
+
+      // Replacing 'src' with a plain attribute transitions the slot from ValueType.SRC back to ValueType.UNKNOWN.
+      domModel.attributeRemoved(node.id, 'src');
+      domModel.attributeModified(node.id, 'type', 'module');
+      treeElement.updateTitle();
+      const attrValue = treeElement.widget.contentElement.querySelector('.webkit-html-attribute-value');
+      assert.strictEqual(attrValue?.textContent?.replace(/\u200B/g, ''), 'module');
+
+      // Also verify IMG transitions between plain attributes and srcset (ValueType.SRCSET).
+      const imgNode = SDK.DOMModel.DOMNode.create(domModel, null, false, {
+        nodeId: 2 as Protocol.DOM.NodeId,
+        backendNodeId: 3 as Protocol.DOM.BackendNodeId,
+        nodeType: Node.ELEMENT_NODE,
+        nodeName: 'IMG',
+        localName: 'img',
+        nodeValue: '',
+        attributes: ['data-srcset', '1x.png 1x', 'srcset', '1x.png 1x, 2x.png 2x'],
+        childNodeCount: 0,
+      });
+      sinon.stub(imgNode, 'resolveURL').callsFake(url => Platform.DevToolsPath.urlString`http://example.com/${url}`);
+      const imgTreeElement = renderTreeNode(imgNode);
+      assert.lengthOf(getLinkOutputs(imgTreeElement), 2);
+
+      domModel.attributeRemoved(imgNode.id, 'data-srcset');
+      imgTreeElement.updateTitle();
+      assert.lengthOf(getLinkOutputs(imgTreeElement), 2);
     });
   });
 });
@@ -2676,5 +2763,207 @@ describeWithEnvironment('ElementsTreeElement Change Tracking', () => {
     const threads = universe.commentManager.getCommentThreads();
     assert.lengthOf(threads, 1);
     assert.strictEqual(threads[0].comments[0].text, 'Removed node <span>');
+  });
+
+  it('renders RTL and BiDi Arabic and Hebrew text in attributes and text nodes', () => {
+    const bidiNode = SDK.DOMModel.DOMNode.create(testDomModel, null, false, {
+      nodeId: 20 as Protocol.DOM.NodeId,
+      backendNodeId: 20 as Protocol.DOM.BackendNodeId,
+      nodeType: Node.ELEMENT_NODE,
+      nodeName: 'DIV',
+      localName: 'div',
+      nodeValue: '',
+      attributes: ['title', 'اختبار النص العربي'],
+      childNodeCount: 1,
+      children: [{
+        nodeId: 21 as Protocol.DOM.NodeId,
+        parentId: 20 as Protocol.DOM.NodeId,
+        backendNodeId: 21 as Protocol.DOM.BackendNodeId,
+        nodeType: Node.TEXT_NODE,
+        nodeName: '#text',
+        localName: '',
+        nodeValue: 'טקסט בעברית',
+        childNodeCount: 0,
+      }],
+    });
+    const bidiTreeElement = new Elements.ElementsTreeElement.ElementsTreeElement(bidiNode, false);
+    outline.appendChild(bidiTreeElement);
+    bidiTreeElement.widget.performUpdate();
+
+    const attrVal = bidiTreeElement.widget.contentElement.querySelector('.webkit-html-attribute-value');
+    const textEl = bidiTreeElement.widget.contentElement.querySelector('.webkit-html-text-node');
+    assert.strictEqual(attrVal?.textContent?.replace(/\u200B/g, '').trim(), 'اختبار النص العربي');
+    assert.strictEqual(textEl?.textContent, 'טקסט בעברית');
+  });
+
+  it('renders lowercase HTML tag names and camelCase SVG tag names via nodeNameInCorrectCase', () => {
+    const htmlNode = SDK.DOMModel.DOMNode.create(testDomModel, null, false, {
+      nodeId: 30 as Protocol.DOM.NodeId,
+      backendNodeId: 30 as Protocol.DOM.BackendNodeId,
+      nodeType: Node.ELEMENT_NODE,
+      nodeName: 'DIV',
+      localName: 'div',
+      nodeValue: '',
+      childNodeCount: 0,
+    });
+    const svgNode = SDK.DOMModel.DOMNode.create(testDomModel, null, false, {
+      nodeId: 31 as Protocol.DOM.NodeId,
+      backendNodeId: 31 as Protocol.DOM.BackendNodeId,
+      nodeType: Node.ELEMENT_NODE,
+      nodeName: 'feComposite',
+      localName: 'feComposite',
+      nodeValue: '',
+      childNodeCount: 0,
+    });
+    const htmlEl = new Elements.ElementsTreeElement.ElementsTreeElement(htmlNode, false);
+    const svgEl = new Elements.ElementsTreeElement.ElementsTreeElement(svgNode, false);
+    outline.appendChild(htmlEl);
+    outline.appendChild(svgEl);
+    htmlEl.widget.performUpdate();
+    svgEl.widget.performUpdate();
+
+    assert.strictEqual(htmlNode.nodeNameInCorrectCase(), 'div');
+    assert.strictEqual(svgNode.nodeNameInCorrectCase(), 'feComposite');
+    assert.strictEqual(htmlEl.widget.contentElement.querySelector('.webkit-html-tag-name')?.textContent, 'div');
+    assert.strictEqual(svgEl.widget.contentElement.querySelector('.webkit-html-tag-name')?.textContent, 'feComposite');
+  });
+
+  it('renders special whitespace and entities in ElementsTreeElement', () => {
+    const entityNode = SDK.DOMModel.DOMNode.create(testDomModel, null, false, {
+      nodeId: 40 as Protocol.DOM.NodeId,
+      backendNodeId: 40 as Protocol.DOM.BackendNodeId,
+      nodeType: Node.ELEMENT_NODE,
+      nodeName: 'SPAN',
+      localName: 'span',
+      nodeValue: '',
+      childNodeCount: 1,
+      children: [{
+        nodeId: 41 as Protocol.DOM.NodeId,
+        parentId: 40 as Protocol.DOM.NodeId,
+        backendNodeId: 41 as Protocol.DOM.BackendNodeId,
+        nodeType: Node.TEXT_NODE,
+        nodeName: '#text',
+        localName: '',
+        nodeValue: 'a\u00A0b\u00ADc\uFEFFd\u200Be',
+        childNodeCount: 0,
+      }],
+    });
+    const entityEl = new Elements.ElementsTreeElement.ElementsTreeElement(entityNode, false);
+    outline.appendChild(entityEl);
+    entityEl.widget.performUpdate();
+
+    const entities = Array.from(entityEl.widget.contentElement.querySelectorAll('.webkit-html-entity-value'))
+                         .map(el => el.textContent);
+    assert.deepEqual(entities, ['&nbsp;', '&shy;', '&#xFEFF;', '&ZeroWidthSpace;']);
+  });
+
+  it('renders ZWNJ inside BiDi attribute values and text nodes as &zwnj; entities', () => {
+    // Mirrors legacy elements/bidi-dom-tree.
+    const bidiValue =
+        '\u0648\u06CC\u06A9\u06CC\u200C\u067E\u062F\u06CC\u0627:\u062E\u0648\u0634\u200C\u0622\u0645\u062F\u06CC\u062F';
+    const expectedValue =
+        '\u0648\u06CC\u06A9\u06CC&zwnj;\u067E\u062F\u06CC\u0627:\u062E\u0648\u0634&zwnj;\u0622\u0645\u062F\u06CC\u062F';
+    const bidiNode = SDK.DOMModel.DOMNode.create(testDomModel, null, false, {
+      nodeId: 60 as Protocol.DOM.NodeId,
+      backendNodeId: 60 as Protocol.DOM.BackendNodeId,
+      nodeType: Node.ELEMENT_NODE,
+      nodeName: 'DIV',
+      localName: 'div',
+      nodeValue: '',
+      attributes: ['title', bidiValue],
+      childNodeCount: 1,
+      children: [{
+        nodeId: 61 as Protocol.DOM.NodeId,
+        parentId: 60 as Protocol.DOM.NodeId,
+        backendNodeId: 61 as Protocol.DOM.BackendNodeId,
+        nodeType: Node.TEXT_NODE,
+        nodeName: '#text',
+        localName: '',
+        nodeValue: bidiValue,
+        childNodeCount: 0,
+      }],
+    });
+    const bidiTreeElement = new Elements.ElementsTreeElement.ElementsTreeElement(bidiNode, false);
+    outline.appendChild(bidiTreeElement);
+    bidiTreeElement.widget.performUpdate();
+
+    const attrVal = bidiTreeElement.widget.contentElement.querySelector('.webkit-html-attribute-value');
+    const textEl = bidiTreeElement.widget.contentElement.querySelector('.webkit-html-text-node');
+    assert.strictEqual(attrVal?.textContent?.replace(/\u200B/g, ''), expectedValue);
+    assert.strictEqual(textEl?.textContent, expectedValue);
+    assert.notInclude(attrVal?.textContent ?? '', '\u200C');
+    assert.notInclude(textEl?.textContent ?? '', '\u200C');
+    const attrEntities =
+        Array.from(attrVal?.querySelectorAll('.webkit-html-entity-value') ?? []).map(e => e.textContent);
+    const textEntities =
+        Array.from(textEl?.querySelectorAll('.webkit-html-entity-value') ?? []).map(e => e.textContent);
+    assert.deepEqual(attrEntities, ['&zwnj;', '&zwnj;']);
+    assert.deepEqual(textEntities, ['&zwnj;', '&zwnj;']);
+  });
+
+  it('renders a text child consisting of only U+FEFF inline as &#xFEFF;', () => {
+    // Mirrors the #replacement-character element from legacy elements/elements-panel-structure.
+    const node = SDK.DOMModel.DOMNode.create(testDomModel, null, false, {
+      nodeId: 70 as Protocol.DOM.NodeId,
+      backendNodeId: 70 as Protocol.DOM.BackendNodeId,
+      nodeType: Node.ELEMENT_NODE,
+      nodeName: 'DIV',
+      localName: 'div',
+      nodeValue: '',
+      attributes: ['id', 'replacement-character'],
+      childNodeCount: 1,
+      children: [{
+        nodeId: 71 as Protocol.DOM.NodeId,
+        parentId: 70 as Protocol.DOM.NodeId,
+        backendNodeId: 71 as Protocol.DOM.BackendNodeId,
+        nodeType: Node.TEXT_NODE,
+        nodeName: '#text',
+        localName: '',
+        nodeValue: '\uFEFF',
+        childNodeCount: 0,
+      }],
+    });
+    assert.isTrue(Elements.ElementsTreeElement.ElementsTreeElement.canShowInlineText(node));
+    const treeElement = new Elements.ElementsTreeElement.ElementsTreeElement(node, false);
+    outline.appendChild(treeElement);
+    treeElement.widget.performUpdate();
+
+    const textEl = treeElement.widget.contentElement.querySelector('.webkit-html-text-node');
+    assert.strictEqual(textEl?.textContent, '&#xFEFF;');
+    assert.strictEqual(textEl?.querySelector('.webkit-html-entity-value')?.textContent, '&#xFEFF;');
+    assert.strictEqual(treeElement.widget.contentElement.textContent?.replace(/\u200B/g, '').replace(/\s+/g, ''),
+                       '<divid="replacement-character">&#xFEFF;</div>');
+  });
+
+  it('updates inline <style> ElementsTreeElement title when CharacterDataModified fires', () => {
+    outline.wireToDOMModel(testDomModel);
+    const styleNode = SDK.DOMModel.DOMNode.create(testDomModel, null, false, {
+      nodeId: 50 as Protocol.DOM.NodeId,
+      backendNodeId: 50 as Protocol.DOM.BackendNodeId,
+      nodeType: Node.ELEMENT_NODE,
+      nodeName: 'STYLE',
+      localName: 'style',
+      nodeValue: '',
+      childNodeCount: 1,
+      children: [{
+        nodeId: 51 as Protocol.DOM.NodeId,
+        parentId: 50 as Protocol.DOM.NodeId,
+        backendNodeId: 51 as Protocol.DOM.BackendNodeId,
+        nodeType: Node.TEXT_NODE,
+        nodeName: '#text',
+        localName: '',
+        nodeValue: 'body { color: red; }',
+        childNodeCount: 0,
+      }],
+    });
+    outline.rootDOMNode = styleNode;
+    const styleEl = outline.findTreeElement(styleNode)!;
+    styleEl.widget.performUpdate();
+    assert.include(styleEl.widget.contentElement.textContent, 'body { color: red; }');
+
+    testDomModel.characterDataModified(51 as Protocol.DOM.NodeId, 'body { color: blue; }');
+    outline.runPendingUpdates();
+    styleEl.widget.performUpdate();
+    assert.include(styleEl.widget.contentElement.textContent, 'body { color: blue; }');
   });
 });

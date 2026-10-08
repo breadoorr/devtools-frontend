@@ -4,15 +4,13 @@
 
 import type * as Common from '../../core/common/common.js';
 import * as Root from '../../core/root/root.js';
-import * as SDK from '../../core/sdk/sdk.js';
-import type * as Protocol from '../../generated/protocol.js';
 import * as CommentManager from '../../models/comment_manager/comment_manager.js';
 import * as Comments from '../../ui/comments/comments.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as Lit from '../../ui/lit/lit.js';
 
 import commentsOverlayStyles from './commentsOverlay.css.js';
-import {CommentThreadWidget, type Title} from './CommentThreadWidget.js';
+import {CommentThreadWidget, computeCommentTitle, type Title} from './CommentThreadWidget.js';
 
 const {
   html,
@@ -31,7 +29,6 @@ export interface ViewInput {
   activePin: Comments.CommentOverlayManager.PinPositionData|null;
   title: Title;
   onAddComment: (text: string) => void;
-  onCloseCommentThread: () => void;
 }
 
 export type View = (
@@ -111,7 +108,6 @@ const DEFAULT_VIEW: View = (input: ViewInput, _output: undefined, target: HTMLEl
                 title: input.title,
                 comments: [...item.thread.comments],
                 onAddComment: input.onAddComment,
-                onClose: input.onCloseCommentThread,
               })}
             </div>
           `;
@@ -323,36 +319,10 @@ export class CommentsOverlayWidget extends UI.Widget.Widget {
     if (anchor === this.#cachedTitleAnchor) {
       return this.#cachedTitle;
     }
-    const title = anchor ? await this.#computeTitle(anchor) : {text: ''};
+    const title = anchor ? await computeCommentTitle(anchor) : {text: ''};
     this.#cachedTitleAnchor = anchor;
     this.#cachedTitle = title;
     return title;
-  }
-
-  async #computeTitle(anchor: CommentManager.CommentManager.CommentAnchorSignature): Promise<Title> {
-    if (anchor.node) {
-      const target = SDK.TargetManager.TargetManager.instance().targetById(anchor.node.targetId);
-      if (target) {
-        const deferredNode = new SDK.DOMModel.DeferredDOMNode(
-            target,
-            anchor.node.backendNodeId as Protocol.DOM.BackendNodeId,
-        );
-        const node = await deferredNode.resolvePromise();
-        if (node) {
-          return {node};
-        }
-      }
-    }
-
-    if (anchor.networkRequestId) {
-      const target = SDK.TargetManager.TargetManager.instance().primaryPageTarget();
-      const request = target?.model(SDK.NetworkManager.NetworkManager)?.requestForId(anchor.networkRequestId);
-      if (request) {
-        return {text: request.name()};
-      }
-    }
-
-    return {text: anchor.textSignature || ''};
   }
 
   #handlePinClick = (threadId: string): void => {
@@ -397,7 +367,6 @@ export class CommentsOverlayWidget extends UI.Widget.Widget {
           activePin: null,
           title: {text: ''},
           onAddComment: () => {},
-          onCloseCommentThread: this.#handleCloseCommentThread,
         },
         undefined,
         this.contentElement,
@@ -436,7 +405,6 @@ export class CommentsOverlayWidget extends UI.Widget.Widget {
           }
         }, AUTO_CLOSE_DELAY_MS);
       },
-      onCloseCommentThread: this.#handleCloseCommentThread,
     };
     this.#view(viewInput, undefined, this.contentElement);
   }
@@ -464,9 +432,48 @@ export class CommentsOverlayWidget extends UI.Widget.Widget {
 
     this.#renderWithTitle(activeThread, title);
   }
+
+  openThread(threadId: string): void {
+    this.#clearCloseTimeout();
+    this.#commentOverlayManager.clearDraftThreads();
+    this.#setActiveThreadId(threadId);
+    this.requestUpdate();
+  }
 }
 
 let widgetInstance: CommentsOverlayWidget|null = null;
+
+function getOrCreateOverlayWidget(
+    commentManager?: CommentManager.CommentManager.CommentManager,
+    ): CommentsOverlayWidget {
+  if (!widgetInstance) {
+    const cm = commentManager ??
+        Root.DevToolsContext.globalInstance().get(
+            CommentManager.CommentManager.CommentManager,
+        );
+    widgetInstance = new CommentsOverlayWidget(undefined, [cm]);
+    widgetInstance.markAsRoot();
+    widgetInstance.show(document.body);
+  }
+  return widgetInstance;
+}
+
+export class ThreadRevealer implements Common.Revealer.Revealer<CommentManager.CommentManager.CommentThread> {
+  async reveal(thread: CommentManager.CommentManager.CommentThread): Promise<void> {
+    const panelId = Comments.CommentAnchorResolver.extractPanelId(thread.anchor.vePath);
+    if (panelId && UI.InspectorView.InspectorView.instance().hasPanel(panelId)) {
+      await UI.InspectorView.InspectorView.instance().showPanel(panelId);
+    }
+
+    const element = Comments.CommentAnchorResolver.rematchCommentAnchor(thread);
+    if (element) {
+      element.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'smooth'});
+    }
+
+    const overlay = getOrCreateOverlayWidget();
+    overlay.openThread(thread.id);
+  }
+}
 
 export class ActionDelegate implements UI.ActionRegistration.ActionDelegate {
   readonly #commentManager: CommentManager.CommentManager.CommentManager;
@@ -483,14 +490,7 @@ export class ActionDelegate implements UI.ActionRegistration.ActionDelegate {
       if (!this.#commentManager.isAgentAttached()) {
         return false;
       }
-      if (!widgetInstance) {
-        widgetInstance = new CommentsOverlayWidget(
-            undefined,
-            [this.#commentManager],
-        );
-        widgetInstance.markAsRoot();
-        widgetInstance.show(document.body);
-      }
+      getOrCreateOverlayWidget(this.#commentManager);
       this.#commentManager.setCommentMode(
           !this.#commentManager.isCommentMode(),
       );

@@ -12,7 +12,12 @@ import {scopeTreeForScript} from './ScopeTreeCache.js';
 import type {Script} from './Script.js';
 import {buildOriginalScopes, decodePastaRanges, type NamedFunctionRange} from './SourceMapFunctionRanges.js';
 import {decodeRangeMappings} from './SourceMapRangeMappings.js';
-import {scriptRelativePosition, SourceMapScopesInfo, type TranslatedFrame} from './SourceMapScopesInfo.js';
+import {
+  type PositionRange,
+  type RawFrameTranslation,
+  scriptRelativePosition,
+  SourceMapScopesInfo,
+} from './SourceMapScopesInfo.js';
 
 /**
  * Type of the base source map JSON object, which contains the sources and the mappings at the very least, plus
@@ -33,7 +38,8 @@ export interface SourceMapV3Object {
 
   names?: string[];
   ignoreList?: number[];
-  scopes?: string;
+  scopes?: Array<string|null>;
+  ranges?: string[];
   rangeMappings?: string;
   debugId?: string;
   x_google_linecount?: number;
@@ -247,6 +253,16 @@ export class SourceMap {
   hasScopeInfo(): boolean {
     this.#ensureSourceMapProcessed();
     return this.#scopesInfo !== null && !this.#scopesInfo.isEmpty();
+  }
+
+  /**
+   * True iff the scopes come from the source map itself (encoded `scopes`), not from the AST fallback or from an
+   * extension.
+   */
+  hasEncodedScopeInfo(): boolean {
+    this.#ensureSourceMapProcessed();
+    return this.#scopesInfo !== null && this.#scopesFallbackPromise === undefined &&
+        this.#scopesInfo.hasGeneratedRanges();
   }
 
   waitForScopeInfo(): Promise<void> {
@@ -609,11 +625,11 @@ export class SourceMap {
     if (!this.#scopesInfo) {
       this.#scopesInfo = new SourceMapScopesInfo(this, {scopes: [], ranges: []});
     }
-    if (map.scopes) {
+    if (map.scopes || map.ranges) {
       const {scopes, ranges} = ScopesCodec.decode(
           map as ScopesCodec.SourceMapJson,
           {mode: ScopesCodec.DecodeMode.LAX, generatedOffset: {line: baseLineNumber, column: baseColumnNumber}});
-      this.#scopesInfo.addOriginalScopes(scopes);
+      this.#scopesInfo.addOriginalScopes(scopes.length ? scopes : new Array(map.sources.length).fill(null));
       this.#scopesInfo.addGeneratedRanges(ranges);
     } else if (map.x_com_bloomberg_sourcesFunctionMappings) {
       const originalScopes = this.parseBloombergScopes(map);
@@ -662,7 +678,7 @@ export class SourceMap {
     }
   }
 
-  private parseBloombergScopes(map: SourceMapV3Object): Array<ScopesCodec.OriginalScope|null> {
+  private parseBloombergScopes(map: SourceMapV3Object): Array<ScopesCodec.OriginalScope[]|null> {
     const scopeList = map.x_com_bloomberg_sourcesFunctionMappings;
     if (!scopeList) {
       throw new Error('Cant decode pasta scopes without x_com_bloomberg_sourcesFunctionMappings field');
@@ -851,7 +867,8 @@ export class SourceMap {
     }
 
     const {line, column} = scriptRelativePosition(location);
-    return this.#scopesInfo.resolveMappedVariablesAtPosition(line, column, ignoreInnerBlockScopes);
+    return this.#scopesInfo.resolveMappedVariablesAtPosition(line, column, ignoreInnerBlockScopes,
+                                                             location.inlineFrameIndex);
   }
 
   findOriginalFunctionName(position: ScopesCodec.Position): string|null {
@@ -865,19 +882,38 @@ export class SourceMap {
     return this.#scopesInfo?.findOriginalFunctionScope(position) ?? null;
   }
 
-  isOutlinedFrame(generatedLine: number, generatedColumn: number): boolean {
+  /** See {@link SourceMapScopesInfo.translateRawFrame}. `null` if no scopes information is available. */
+  translateRawFrame(generatedLine: number, generatedColumn: number): RawFrameTranslation|null {
     this.#ensureSourceMapProcessed();
-    return this.#scopesInfo?.isOutlinedFrame(generatedLine, generatedColumn) ?? false;
+    return this.#scopesInfo?.translateRawFrame(generatedLine, generatedColumn) ?? null;
   }
 
-  hasInlinedFrames(generatedLine: number, generatedColumn: number): boolean {
-    this.#ensureSourceMapProcessed();
-    return this.#scopesInfo?.hasInlinedFrames(generatedLine, generatedColumn) ?? false;
+  /** See {@link SourceMapScopesInfo.inlinedFunctionRange}. `null` without encoded scopes. */
+  inlinedFunctionRange(generatedLine: number, generatedColumn: number): PositionRange|null {
+    return this.hasEncodedScopeInfo() ? this.#scopesInfo?.inlinedFunctionRange(generatedLine, generatedColumn) ?? null :
+                                        null;
   }
 
-  translateCallSite(generatedLine: number, generatedColumn: number): TranslatedFrame[] {
-    this.#ensureSourceMapProcessed();
-    return this.#scopesInfo?.translateCallSite(generatedLine, generatedColumn) ?? [];
+  /** See {@link SourceMapScopesInfo.inlinedCalleeRanges}. Empty without encoded scopes. */
+  inlinedCalleeRanges(generatedLine: number, generatedColumn: number): PositionRange[] {
+    return this.hasEncodedScopeInfo() ? this.#scopesInfo?.inlinedCalleeRanges(generatedLine, generatedColumn) ?? [] :
+                                        [];
+  }
+
+  /** See {@link SourceMapScopesInfo.hasOutlinedFunctions}. False without encoded scopes. */
+  hasOutlinedFunctions(): boolean {
+    return this.hasEncodedScopeInfo() && (this.#scopesInfo?.hasOutlinedFunctions() ?? false);
+  }
+
+  /** See {@link SourceMapScopesInfo.outlinedFunctionRanges}. Empty without encoded scopes. */
+  outlinedFunctionRanges(generatedLine: number, generatedColumn: number): PositionRange[] {
+    return this.hasEncodedScopeInfo() ? this.#scopesInfo?.outlinedFunctionRanges(generatedLine, generatedColumn) ?? [] :
+                                        [];
+  }
+
+  /** See {@link SourceMapScopesInfo.artificialFunctionRanges}. Empty without encoded scopes. */
+  artificialFunctionRanges(): PositionRange[] {
+    return this.hasEncodedScopeInfo() ? this.#scopesInfo?.artificialFunctionRanges() ?? [] : [];
   }
 }
 

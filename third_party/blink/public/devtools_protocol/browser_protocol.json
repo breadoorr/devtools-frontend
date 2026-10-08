@@ -5991,6 +5991,23 @@
                     ]
                 },
                 {
+                    "name": "forcePositionTryOption",
+                    "description": "Forces a position-try option for the given node.",
+                    "parameters": [
+                        {
+                            "name": "nodeId",
+                            "description": "The element id for which to force the position-try option.",
+                            "$ref": "DOM.NodeId"
+                        },
+                        {
+                            "name": "index",
+                            "description": "The 1-based index of the position-try fallback option, 0 for base position (no fallback),\nor omitted to clear the forced state.",
+                            "optional": true,
+                            "type": "integer"
+                        }
+                    ]
+                },
+                {
                     "name": "getBackgroundColors",
                     "parameters": [
                         {
@@ -13358,6 +13375,35 @@
                             "$ref": "Directory"
                         }
                     ]
+                }
+            ]
+        },
+        {
+            "domain": "FindInPage",
+            "description": "This domain provides commands to trigger the \"Find in page\" feature.",
+            "experimental": true,
+            "commands": [
+                {
+                    "name": "findFirst",
+                    "description": "Forwards `query` to the find-in-page facility, starting a new find session.\nWhere exactly the search starts from is implementation-specific.",
+                    "parameters": [
+                        {
+                            "name": "query",
+                            "type": "string"
+                        }
+                    ]
+                },
+                {
+                    "name": "findNext",
+                    "description": "Moves to the next match for the query passed to the most recent\nfindFirst() call."
+                },
+                {
+                    "name": "findPrev",
+                    "description": "Moves to the previous match for the query passed to the most recent\nfindFirst() call."
+                },
+                {
+                    "name": "stop",
+                    "description": "Ends the current find session, if any, and clears its highlighting."
                 }
             ]
         },
@@ -22086,6 +22132,7 @@
                         "private-state-token-redemption",
                         "publickey-credentials-create",
                         "publickey-credentials-get",
+                        "publickey-credentials-remote-client-data-json",
                         "rewriter",
                         "screen-wake-lock",
                         "serial",
@@ -31373,11 +31420,15 @@
                             "$ref": "Location"
                         },
                         {
-                            "name": "empty",
-                            "description": "True if the scope does not declare any variables or have a runtime context.\nOnly present if true.\nEmpty scopes are retained in the scope chain because\nthey can be targeted via `evaluateOnCallFrame` (using `scopeNumber`) or\nmatched against scopes in source maps.",
+                            "name": "emptyReason",
+                            "description": "Present if the scope has no variable values to show. Absent means that\nthe scope declares at least one variable with an available value.\nEmpty scopes are retained in the scope chain because\nthey can be targeted via `evaluateOnCallFrame` (using `scopeNumber`) or\nmatched against scopes in source maps.",
                             "experimental": true,
                             "optional": true,
-                            "type": "boolean"
+                            "type": "string",
+                            "enum": [
+                                "no-variables",
+                                "all-unavailable"
+                            ]
                         }
                     ]
                 },
@@ -32289,6 +32340,16 @@
                         {
                             "name": "skipList",
                             "description": "The skipList specifies location ranges that should be skipped on step over.",
+                            "experimental": true,
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "$ref": "LocationRange"
+                            }
+                        },
+                        {
+                            "name": "enterRanges",
+                            "description": "Functions whose source range lies within one of the enterRanges are\nentered as if by stepInto, even when they are called (directly or\nindirectly) from a call that is stepped over.",
                             "experimental": true,
                             "optional": true,
                             "type": "array",

@@ -29,8 +29,7 @@ import {cleanupSettings, setupSettings} from './SettingsHelpers.js';
 // eslint-disable-next-line @typescript-eslint/naming-convention
 let UI: typeof UIModule;
 
-export {createTarget} from './TargetHelpers.js';
-export {stubNoopSettings} from './SettingsHelpers.js';
+export {createTarget, waitForTarget} from './TargetHelpers.js';
 
 export function registerActions(actions: UIModule.ActionRegistration.ActionRegistration[]): void {
   for (const action of actions) {
@@ -227,7 +226,9 @@ export function expectConsoleLogs(expectedLogs: {warn?: string[], log?: string[]
 let userAgentStub: sinon.SinonStub|undefined;
 
 export function setUserAgentForTesting(): void {
-  userAgentStub = sinon.stub(Platform.HostRuntime.HOST_RUNTIME, 'getUserAgent').returns('Chrome/unit_test');
+  if (Platform.HostRuntime.HOST_RUNTIME.getUserAgent() !== 'Chrome/unit_test') {
+    userAgentStub = sinon.stub(Platform.HostRuntime.HOST_RUNTIME, 'getUserAgent').returns('Chrome/unit_test');
+  }
 }
 
 export function restoreUserAgentForTesting(): void {

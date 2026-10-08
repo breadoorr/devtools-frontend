@@ -61,6 +61,7 @@ import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as Lit from '../../ui/lit/lit.js';
 import type {DirectiveResult} from '../../ui/lit/lit.js';
+import * as SettingsUI from '../../ui/settings/settings.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 import * as PanelsCommon from '../common/common.js';
 import * as Media from '../media/media.js';
@@ -628,7 +629,7 @@ function renderLinkifiedValue(value: string, node: SDK.DOMModel.DOMNode): Lit.Te
       if (el) {
         setValueWithEntities(el, value);
       }
-    })}}></span>`;
+    })}></span>`;
   }
   value = value.replace(closingPunctuationRegex, '$&\u200B');
   if (value.startsWith('data:')) {
@@ -751,12 +752,20 @@ function renderAttribute(attr: {name: string, value?: string},
     valueType = ValueType.SRCSET;
   }
 
-  const withEntitiesRef = (valueType === ValueType.UNKNOWN && !isRelation) ? ref(el => {
-    if (el) {
-      setValueWithEntities(el, value);
-    }
-  }) :
-                                                                             nothing;
+  let valueContent: Lit.LitTemplate|DirectiveResult = nothing;
+  if (valueType === ValueType.SRC) {
+    valueContent = renderLinkifiedValue(value, node);
+  } else if (valueType === ValueType.SRCSET) {
+    valueContent = renderLinkifiedSrcset(Common.Srcset.parseSrcset(value), node);
+  } else if (linkifyValue && relationPromise) {
+    valueContent = until(relationPromise, value);
+  } else if (valueType === ValueType.UNKNOWN && !isRelation) {
+    valueContent = html`<span ${ref(el => {
+      if (el) {
+        setValueWithEntities(el, value);
+      }
+    })}></span>`;
+  }
 
   const jslog = VisualLogging.value(name === 'style' ? 'style-attribute' : 'attribute').track({
     change: true,
@@ -772,16 +781,10 @@ function renderAttribute(attr: {name: string, value?: string},
   return html`<span class="webkit-html-attribute" jslog=${jslog}><span class=${classMap(attributeNameClasses)}
       ${animateOn(Boolean(updateRecord?.isAttributeModified(name) && !hasText), DOM_UPDATE_ANIMATION_CLASS_NAME)}>${
       linkifyName && relationPromise ? until(relationPromise, name) : name}</span>${
-      hasText ?
-          html`=\u200B"<span class="webkit-html-attribute-value" ${
-              animateOn(Boolean(updateRecord?.isAttributeModified(name) && hasText),
-                        DOM_UPDATE_ANIMATION_CLASS_NAME)} ${withEntitiesRef}>
-                        ${valueType === ValueType.SRC ? renderLinkifiedValue(value, node) : nothing}
-                        ${
-              valueType === ValueType.SRCSET ? renderLinkifiedSrcset(Common.Srcset.parseSrcset(value), node) : nothing}
-                        ${linkifyValue && relationPromise ? until(relationPromise, value) : nothing}
-                </span>"` :
-          nothing}</span>`;
+      hasText ? html`=\u200B"<span class="webkit-html-attribute-value" ${
+                    animateOn(Boolean(updateRecord?.isAttributeModified(name) && hasText),
+                              DOM_UPDATE_ANIMATION_CLASS_NAME)}>${valueContent}</span>"` :
+                nothing}</span>`;
 }
 
 function renderTag(node: SDK.DOMModel.DOMNode, tagName: string, isClosingTag: boolean, expanded: boolean,
@@ -1452,7 +1455,10 @@ export class ElementsTreeWidget extends UI.Widget.Widget {
 
   static visibleShadowRoots(node: SDK.DOMModel.DOMNode): SDK.DOMModel.DOMNode[] {
     let roots = node.shadowRoots();
-    if (roots.length && !Common.Settings.Settings.instance().moduleSetting('show-ua-shadow-dom').get()) {
+    if (roots.length &&
+        !Common.Settings.Settings.instance()
+             .resolve(SettingsUI.ElementsSettings.showUAShadowDOMSettingDescriptor)
+             .get()) {
       roots = roots.filter(filter);
     }
 
@@ -2652,9 +2658,10 @@ export class ElementsTreeWidget extends UI.Widget.Widget {
 
     if (attributeName !== null && (attributeName.trim() || newText.trim()) && oldText !== newText) {
       const edit = {attributeName, oldText, newText};
+      // The changeTracker has to be resolved before the widget is detached from the DOM.
+      const changeTracker = this.changeTracker;
       this.node.setAttribute(attributeName, newText, (error: string|null) => {
         if (!error) {
-          const changeTracker = this.changeTracker;
           Elements.DOMChanges.trackAttributeEdit(changeTracker, this.node,
                                                  buildChangeSelector(changeTracker, this.node), edit);
           Badges.UserBadges.instance().recordAction(Badges.BadgeAction.DOM_ELEMENT_OR_ATTRIBUTE_EDITED);
@@ -2714,6 +2721,8 @@ export class ElementsTreeWidget extends UI.Widget.Widget {
     }
 
     const wasExpanded = this.#expanded;
+    // The changeTracker has to be resolved before the widget is detached from the DOM.
+    const changeTracker = this.changeTracker;
 
     this.node.setNodeName(newText, (error, newNode) => {
       if (error || !newNode) {
@@ -2722,7 +2731,6 @@ export class ElementsTreeWidget extends UI.Widget.Widget {
       }
 
       Badges.UserBadges.instance().recordAction(Badges.BadgeAction.DOM_ELEMENT_OR_ATTRIBUTE_EDITED);
-      const changeTracker = this.changeTracker;
       Elements.DOMChanges.trackTagNameEdit(changeTracker, newNode, buildChangeSelector(changeTracker, newNode),
                                            oldText ?? tagName ?? '', newText);
       if (this.selectNodeAfterEdit) {
@@ -2734,10 +2742,11 @@ export class ElementsTreeWidget extends UI.Widget.Widget {
   private textNodeEditingCommitted(textNode: SDK.DOMModel.DOMNode, _element: Element, newText: string): void {
     this.editing = null;
     const oldValue = textNode.nodeValue() ?? '';
+    // The changeTracker has to be resolved before the widget is detached from the DOM.
+    const changeTracker = this.changeTracker;
 
     function callback(this: ElementsTreeWidget, error?: string|null): void {
       if (!error && oldValue !== newText) {
-        const changeTracker = this.changeTracker;
         Elements.DOMChanges.trackTextNodeEdit(changeTracker, textNode, buildChangeSelector(changeTracker, textNode),
                                               oldValue, newText);
       }

@@ -508,22 +508,25 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
 
     this.traceLoadStart = null;
 
-    this.disableCaptureJSProfileSetting =
-        Common.Settings.Settings.instance().moduleSetting('timeline-disable-js-sampling');
-    this.captureLayersAndPicturesSetting =
-        Common.Settings.Settings.instance().moduleSetting('timeline-capture-layers-and-pictures');
-    this.captureSelectorStatsSetting =
-        Common.Settings.Settings.instance().moduleSetting('timeline-capture-selector-stats');
-    this.screenshotCaptureModeSetting =
-        Common.Settings.Settings.instance().moduleSetting('timeline-screenshot-capture-mode');
+    this.disableCaptureJSProfileSetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineDisableJsSamplingSettingDescriptor);
+    this.captureLayersAndPicturesSetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineCaptureLayersAndPicturesSettingDescriptor);
+    this.captureSelectorStatsSetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineCaptureSelectorStatsSettingDescriptor);
+    this.screenshotCaptureModeSetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineScreenshotCaptureModeSettingDescriptor);
 
-    this.showScreenshotsSetting = Common.Settings.Settings.instance().moduleSetting('timeline-show-screenshots');
+    this.showScreenshotsSetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineShowScreenshotsSettingDescriptor);
     this.showScreenshotsSetting.addChangeListener(this.updateMiniMap, this);
 
-    this.showMemorySetting = Common.Settings.Settings.instance().moduleSetting('timeline-show-memory');
+    this.showMemorySetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineShowMemorySettingDescriptor);
     this.showMemorySetting.addChangeListener(this.onMemoryModeChanged, this);
 
-    this.#dimThirdPartiesSetting = Common.Settings.Settings.instance().moduleSetting('timeline-dim-third-parties');
+    this.#dimThirdPartiesSetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineDimThirdPartiesSettingDescriptor);
     this.#dimThirdPartiesSetting.addChangeListener(this.onDimThirdPartiesChanged, this);
 
     this.#thirdPartyTracksSetting = TimelinePanel.extensionDataVisibilitySetting();
@@ -743,8 +746,12 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
 
   #getModelConfig(): Trace.Types.Configuration.Configuration {
     const config = Trace.Types.Configuration.defaults();
-    config.showAllEvents = Common.Settings.Settings.instance().moduleSetting('timeline-show-all-events').get();
-    config.debugMode = Common.Settings.Settings.instance().moduleSetting('timeline-debug-mode').get() as boolean;
+    config.showAllEvents = Common.Settings.Settings.instance()
+                               .resolve(SettingUIRegistration.TimelineSettings.timelineShowAllEventsSettingDescriptor)
+                               .get();
+    config.debugMode = Common.Settings.Settings.instance()
+                           .resolve(SettingUIRegistration.TimelineSettings.timelineDebugModeSettingDescriptor)
+                           .get();
     config.enableSoftNavigation =
         Common.Settings.Settings.instance().moduleSetting('timeline-enable-soft-navigations').get() as boolean;
     return config;
@@ -779,7 +786,8 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
   static extensionDataVisibilitySetting(): Common.Settings.Setting<boolean> {
     // Calling this multiple times doesn't recreate the setting.
     // Instead, after the second call, the cached setting is returned.
-    return Common.Settings.Settings.instance().moduleSetting('timeline-show-extension-data');
+    return Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.timelineShowExtensionDataSettingDescriptor);
   }
   override searchableView(): UI.SearchableView.SearchableView|null {
     return this.#searchableView;
@@ -1158,7 +1166,9 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
   }
 
   #setupNavigationSetting(): HTMLElement {
-    const currentNavSetting = Common.Settings.Settings.instance().moduleSetting('flamechart-selected-navigation').get();
+    const navSetting = Common.Settings.Settings.instance().resolve(
+        SettingUIRegistration.TimelineSettings.flamechartSelectedNavigationSettingDescriptor);
+    const currentNavSetting = navSetting.get();
     const hideTheDialogForTests: string|null = localStorage.getItem('hide-shortcuts-dialog-for-test');
     const userHadShortcutsDialogOpenedOnce = this.#userHadShortcutsDialogOpenedOnce.get();
 
@@ -1185,11 +1195,11 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
     // Change EventListener is only triggered when the radio button is selected
     this.#modernNavRadioButton.radio.addEventListener('change', () => {
       this.#shortcutsDialog.data = {shortcuts: this.#getShortcutsInfo(/* isNavClassic */ false)};
-      Common.Settings.Settings.instance().moduleSetting('flamechart-selected-navigation').set('modern');
+      navSetting.set('modern');
     });
     this.#classicNavRadioButton.radio.addEventListener('change', () => {
       this.#shortcutsDialog.data = {shortcuts: this.#getShortcutsInfo(/* isNavClassic */ true)};
-      Common.Settings.Settings.instance().moduleSetting('flamechart-selected-navigation').set('classic');
+      navSetting.set('classic');
     });
 
     this.#navigationRadioButtons.appendChild(this.#modernNavRadioButton.label);
@@ -1200,7 +1210,10 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
   }
 
   #updateNavigationSettingSelection(): void {
-    const currentNavSetting = Common.Settings.Settings.instance().moduleSetting('flamechart-selected-navigation').get();
+    const currentNavSetting =
+        Common.Settings.Settings.instance()
+            .resolve(SettingUIRegistration.TimelineSettings.flamechartSelectedNavigationSettingDescriptor)
+            .get();
     if (currentNavSetting === 'classic') {
       this.#classicNavRadioButton.radio.checked = true;
       Host.userMetrics.navigationSettingAtFirstTimelineLoad(
@@ -2118,7 +2131,10 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
 
   #applyActiveFilters(traceIsGeneric: boolean, exclusiveFilter: Trace.Extras.TraceFilter.TraceFilter|null = null):
       void {
-    if (traceIsGeneric || Common.Settings.Settings.instance().moduleSetting('timeline-show-all-events').get()) {
+    if (traceIsGeneric ||
+        Common.Settings.Settings.instance()
+            .resolve(SettingUIRegistration.TimelineSettings.timelineShowAllEventsSettingDescriptor)
+            .get()) {
       return;
     }
 
@@ -2281,7 +2297,9 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
     // Logging the setting on the first timeline load will allow us to get an estimate number of people using each option.
     if (this.#traceEngineModel.size() === 1) {
       this.#setupNavigationSetting();
-      if (Common.Settings.Settings.instance().moduleSetting('flamechart-selected-navigation').get() === 'classic') {
+      if (Common.Settings.Settings.instance()
+              .resolve(SettingUIRegistration.TimelineSettings.flamechartSelectedNavigationSettingDescriptor)
+              .get() === 'classic') {
         Host.userMetrics.navigationSettingAtFirstTimelineLoad(
             Host.UserMetrics.TimelineNavigationSetting.CLASSIC_AT_SESSION_FIRST_TRACE);
       } else {

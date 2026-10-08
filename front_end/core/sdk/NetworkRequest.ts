@@ -30,11 +30,11 @@ const UIStrings = {
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
-  secureOnly: 'This cookie was blocked because it had the "`Secure`" attribute and the connection was not secure',
+  secureOnly: 'This cookie was blocked because it had the "`Secure`" attribute and the connection wasn’t secure',
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
-  notOnPath: 'This cookie was blocked because its path was not an exact match for or a superdirectory of the request URL’s path',
+  notOnPath: 'This cookie was blocked because its path wasn’t an exact match for or a superdirectory of the request URL’s path',
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
@@ -46,15 +46,15 @@ const UIStrings = {
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
-  sameSiteLax: 'This cookie was blocked because it had the "`SameSite=Lax`" attribute and the request was made from a different site and was not initiated by a top-level navigation',
+  sameSiteLax: 'This cookie was blocked because it had the "`SameSite=Lax`" attribute and the request was made from a different site and wasn’t initiated by a top-level navigation',
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
-  sameSiteUnspecifiedTreatedAsLax: 'This cookie didn’t specify a "`SameSite`" attribute when it was stored and was defaulted to "`SameSite=Lax`", and was blocked because the request was made from a different site and was not initiated by a top-level navigation. The cookie had to have been set with "`SameSite=None`" to enable cross-site usage.',
+  sameSiteUnspecifiedTreatedAsLax: 'This cookie didn’t specify a "`SameSite`" attribute when it was stored and was defaulted to "`SameSite=Lax`", and was blocked because the request was made from a different site and wasn’t initiated by a top-level navigation. The cookie had to have been set with "`SameSite=None`" to enable cross-site usage.',
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
-  sameSiteNoneInsecure: 'This cookie was blocked because it had the "`SameSite=None`" attribute but was not marked "`Secure`". Cookies without SameSite restrictions must be marked "`Secure`" and sent over a secure connection.',
+  sameSiteNoneInsecure: 'This cookie was blocked because it had the "`SameSite=None`" attribute but wasn’t marked "`Secure`". Cookies without SameSite restrictions must be marked "`Secure`" and sent over a secure connection.',
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
@@ -90,7 +90,7 @@ const UIStrings = {
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
-  theSchemeOfThisConnectionIsNot: 'The scheme of this connection is not allowed to store cookies',
+  theSchemeOfThisConnectionIsNot: 'The scheme of this connection isn’t allowed to store cookies',
   /**
    * @description Tooltip to explain why a cookie was blocked.
    */
@@ -98,24 +98,24 @@ const UIStrings = {
   /**
    * @description Tooltip to explain why an attempt to set a cookie via a `Set-Cookie` HTTP header on a request's response was blocked.
    */
-  blockedReasonSecureOnly: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it had the "`Secure`" attribute but was not received over a secure connection',
+  blockedReasonSecureOnly: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it had the "`Secure`" attribute but wasn’t received over a secure connection',
   /**
    * @description Tooltip to explain why an attempt to set a cookie via a `Set-Cookie` HTTP header on a request's response was blocked.
    * @example {SameSite=Strict} PH1
    */
-  blockedReasonSameSiteStrictLax: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it had the "{PH1}" attribute but came from a cross-site response which was not the response to a top-level navigation',
+  blockedReasonSameSiteStrictLax: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it had the "{PH1}" attribute but came from a cross-site response which wasn’t the response to a top-level navigation',
   /**
    * @description Tooltip to explain why an attempt to set a cookie via a `Set-Cookie` HTTP header on a request's response was blocked.
    */
-  blockedReasonSameSiteUnspecifiedTreatedAsLax: 'This "`Set-Cookie`" header didn’t specify a "`SameSite`" attribute and was defaulted to "`SameSite=Lax`", and was blocked because it came from a cross-site response which was not the response to a top-level navigation. The "`Set-Cookie`" header had to have been set with "`SameSite=None`" to enable cross-site usage.',
+  blockedReasonSameSiteUnspecifiedTreatedAsLax: 'This "`Set-Cookie`" header didn’t specify a "`SameSite`" attribute and was defaulted to "`SameSite=Lax`", and was blocked because it came from a cross-site response which wasn’t the response to a top-level navigation. The "`Set-Cookie`" header had to have been set with "`SameSite=None`" to enable cross-site usage.',
   /**
    * @description Tooltip to explain why an attempt to set a cookie via a `Set-Cookie` HTTP header on a request's response was blocked.
    */
-  blockedReasonSameSiteNoneInsecure: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it had the "`SameSite=None`" attribute but did not have the "`Secure`" attribute, which is required in order to use "`SameSite=None`"',
+  blockedReasonSameSiteNoneInsecure: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it had the "`SameSite=None`" attribute but didn’t have the "`Secure`" attribute, which is required in order to use "`SameSite=None`"',
   /**
    * @description Tooltip to explain why an attempt to set a cookie via a `Set-Cookie` HTTP header on a request's response was blocked.
    */
-  blockedReasonOverwriteSecure: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it was not sent over a secure connection and would have overwritten a cookie with the "`Secure`" attribute',
+  blockedReasonOverwriteSecure: 'This attempt to set a cookie via a "`Set-Cookie`" header was blocked because it wasn’t sent over a secure connection and would have overwritten a cookie with the "`Secure`" attribute',
   /**
    * @description Tooltip to explain why an attempt to set a cookie via a `Set-Cookie` HTTP header on a request's response was blocked.
    */
@@ -179,6 +179,7 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
   #blockedReason: Protocol.Network.BlockedReason|undefined = undefined;
   #renderBlockingBehavior?: Protocol.Network.RenderBlockingBehavior;
   #initiatorSecurityOrigin?: SecurityOrigin;
+  #requestURLSecurityOrigin?: SecurityOrigin;
   #corsErrorStatus: Protocol.Network.CorsErrorStatus|undefined = undefined;
   statusCode = 0;
   statusText = '';
@@ -193,6 +194,7 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
   #resourceType: Common.ResourceType.ResourceType = Common.ResourceType.resourceTypes.Other;
   #contentData: Promise<TextUtils.ContentData.ContentDataOrError>|null = null;
   #streamingContentData: Promise<TextUtils.StreamingContentData.StreamingContentDataOrError>|null = null;
+  #resolvedStreamingContentData: TextUtils.StreamingContentData.StreamingContentData|null = null;
   readonly #frames: WebSocketFrame[] = [];
   #responseHeaderValues: Record<string, string|undefined> = {};
   #responseHeadersText = '';
@@ -268,7 +270,7 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
   /**
    * Whether this request was imported from a HAR file.
    */
-  #isImportedHar = false;
+  readonly #isImportedHar: boolean;
   #associatedData = new Map<string, object>();
   #hasOverriddenContent = false;
   #hasThirdPartyCookiePhaseoutIssue = false;
@@ -293,6 +295,7 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
       hasUserGesture?: boolean,
       // eslint-disable-next-line @devtools/no-instance-of-migrated-singletons
       console: Common.Console.Console = Common.Console.Console.instance(),
+      isImportedHar = false,
   ) {
     super();
 
@@ -307,6 +310,7 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
     this.#isAdRelated = false;
     this.#isLinkPreload = false;
     this.#console = console;
+    this.#isImportedHar = isImportedHar;
   }
 
   static create(
@@ -371,6 +375,36 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
     );
   }
 
+  /**
+   * Creates a network request representing an entry imported from a HAR file.
+   *
+   * Use this instead of {@link createWithoutBackendRequest} when importing HAR logs
+   * (or testing HAR-imported traffic) so that the request is marked as HAR-imported
+   * at construction time and its security origins ({@link requestURLSecurityOrigin}
+   * and {@link initiatorSecurityOrigin}) resolve to isolated `imported-har://`
+   * virtual origins rather than colliding with live web origins.
+   */
+  static createForImportedHar(
+      requestId: string,
+      url: Platform.DevToolsPath.UrlString,
+      documentURL: Platform.DevToolsPath.UrlString,
+      initiator: Protocol.Network.Initiator|null,
+      console?: Common.Console.Console,
+      ): NetworkRequest {
+    return new NetworkRequest(
+        requestId,
+        undefined,
+        url,
+        documentURL,
+        null,
+        null,
+        initiator,
+        undefined,
+        console,
+        true,
+    );
+  }
+
   identityCompare(other: NetworkRequest): number {
     const thisId = this.requestId();
     const thatId = other.requestId();
@@ -402,10 +436,16 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
    * (`imported-har://${authority}`) to ensure recorded network traffic never collides with
    * live web origins.
    *
+   * The result is cached, so repeated calls return the same instance until the URL changes.
+   * This keeps opaque origins (such as `data:` URLs) same-origin with themselves.
+   *
    * @see {@link initiatorSecurityOrigin} to obtain the origin of the document that initiated the request.
    */
   requestURLSecurityOrigin(): SecurityOrigin {
-    return this.#resolveSecurityOrigin(this.#url);
+    if (!this.#requestURLSecurityOrigin) {
+      this.#requestURLSecurityOrigin = this.#resolveSecurityOrigin(this.#url);
+    }
+    return this.#requestURLSecurityOrigin;
   }
 
   /**
@@ -421,6 +461,9 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
    *
    * For imported HAR files, the origin is mapped to an isolated virtual domain
    * (`imported-har://${authority}`) matching the imported initiating document.
+   *
+   * The result is cached, so repeated calls return the same instance. This keeps opaque
+   * origins same-origin with themselves.
    *
    * @see {@link requestURLSecurityOrigin} to obtain the origin of the target resource URL being requested.
    */
@@ -462,6 +505,7 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
     this.#parsedQueryParameters = undefined;
     this.#name = undefined;
     this.#path = undefined;
+    this.#requestURLSecurityOrigin = undefined;
   }
 
   get documentURL(): Platform.DevToolsPath.UrlString {
@@ -1206,10 +1250,6 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
     return this.#isImportedHar;
   }
 
-  setIsImportedHar(isImportedHar: boolean): void {
-    this.#isImportedHar = isImportedHar;
-  }
-
   setEarlyHintsHeaders(headers: NameValue[]): void {
     this.earlyHintsHeaders = headers;
   }
@@ -1488,9 +1528,11 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
       }
       // Note that this is save: "streamResponseBody()" always creates base64-based ContentData and
       // for "contentData()" we'll never call "addChunk".
-      return TextUtils.StreamingContentData.StreamingContentData.from(
+      const streamingContentData = TextUtils.StreamingContentData.StreamingContentData.from(
           contentData,
       );
+      this.#resolvedStreamingContentData = streamingContentData;
+      return streamingContentData;
     });
 
     return this.#streamingContentData;
@@ -1510,6 +1552,18 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
       isRegex: boolean,
       ): Promise<TextUtils.ContentProvider.SearchMatch[]> {
     if (!this.#contentDataProvider) {
+      const cachedContentData = this.finished && !this.failed ?
+          (await this.#contentData ?? this.#resolvedStreamingContentData?.content()) :
+          undefined;
+      if (cachedContentData && !TextUtils.ContentData.ContentData.isError(cachedContentData) &&
+          cachedContentData.isTextContent) {
+        return TextUtils.TextUtils.performSearchInContentData(
+            cachedContentData,
+            query,
+            caseSensitive,
+            isRegex,
+        );
+      }
       return await NetworkManager.searchInRequest(
           this,
           query,
@@ -1940,11 +1994,15 @@ export class NetworkRequest extends Common.ObjectWrapper.ObjectWrapper<EventType
     }
     this.endTime = timestamp;
     if (data) {
-      void this.#streamingContentData?.then(contentData => {
-        if (!TextUtils.StreamingContentData.isError(contentData)) {
-          contentData.addChunk(data);
-        }
-      });
+      if (this.#resolvedStreamingContentData) {
+        this.#resolvedStreamingContentData.addChunk(data);
+      } else {
+        void this.#streamingContentData?.then(contentData => {
+          if (!TextUtils.StreamingContentData.isError(contentData)) {
+            contentData.addChunk(data);
+          }
+        });
+      }
     }
   }
 

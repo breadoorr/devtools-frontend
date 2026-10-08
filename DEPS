@@ -12,19 +12,19 @@ vars = {
   'build_with_chromium': False,
 
   'build_url': 'https://chromium.googlesource.com/chromium/src/build.git',
-  'build_revision': '53bf7f251ca8e69d7a9230b63ef1676ffc8f931f',
+  'build_revision': 'b49ff02811370bcab1f750e733b50255e81e1a90',
 
   'buildtools_url': 'https://chromium.googlesource.com/chromium/src/buildtools.git',
-  'buildtools_revision': '64e87f9fbdaf6f53f6cff8f15e4b06f17cead514',
+  'buildtools_revision': '59a37766f17bdd79f4cf9154498cbb823b681531',
 
   'depot_tools_url': 'https://chromium.googlesource.com/chromium/tools/depot_tools.git',
-  'depot_tools_revision': '41c9bd890277c2f551499d171d215dfdf5dab97d',
+  'depot_tools_revision': '071d5b9d91e06cb2a9c9ce926d6ee666df185b49',
 
   'inspector_protocol_url': 'https://chromium.googlesource.com/deps/inspector_protocol',
   'inspector_protocol_revision': 'b8141806c6b0382b0b741d5c23d45c85168644e6',
 
   # Keeping track of the last time we rolled the browser protocol files.
-  'chromium_browser_protocol_revision' : 'cd8ab87ab38bee0c301e4ba26302fd1c7e38377a',
+  'chromium_browser_protocol_revision' : 'b6ee4b885d0553994d65ceed7fa4d86861aa517d',
 
   'clang_format_url': 'https://chromium.googlesource.com/external/github.com/llvm/llvm-project/clang/tools/clang-format.git',
   'clang_format_revision': '9f796802e5d633c96dbe97e0b6683d5e62594f9f',
@@ -32,7 +32,7 @@ vars = {
   'emscripten_tag': 'ade9d780ff17c88d81aa13860361743e3c1e1396',
 
   # GN CIPD package version.
-  'gn_version': 'git_revision:2dfb8cbd3b749242ee4492a7f15eba6889d52c7f',
+  'gn_version': 'git_revision:526295467bd18f5f8d9cb11f03a1c56cb40b7b28',
 
   'cmake_version': 'version:2@3.21.3',
 
@@ -52,7 +52,7 @@ vars = {
   # Note: This var is no longer referenced in the body of this DEPS file.
   # However it is used by the roll script (scripts/deps/roll_deps.py) to ease
   # version resolution. DO NOT REMOVE!
-  'chrome': '156.0.8075.0',
+  'chrome': '157.0.8091.0',
 
   # 'magic' text to tell depot_tools that git submodules should be accepted but
   # but parity with DEPS file is expected.
@@ -65,7 +65,10 @@ vars = {
   'cpython3_version': 'version:3@3.11.9.chromium.38',
 
   # siso CIPD package version
-  'siso_version': 'git_revision:22353054fea20f637c8fa302a90daf9e2cc10497',
+  'siso_version': 'git_revision:7062c4f8a81f14ed840f6c6d1bbef63be5fabaae',
+
+  # Fetches the AI Evals testing data.
+  'checkout_devtools_ai_evals': False,
 }
 
 # Only these hosts are allowed for dependencies in this DEPS file.
@@ -79,6 +82,16 @@ allowed_hosts = [
 ]
 
 deps = {
+  'test/ai_evals/eval_data': {
+    'packages': [
+      {
+        'package': 'experimental/finnur/chrome-devtools-evals',
+        'version': 'latest',
+      },
+    ],
+    'dep_type': 'cipd',
+    'condition': 'checkout_devtools_ai_evals == True',
+  },
   'third_party/clang-format/script': {
     'url': Var('clang_format_url') + '@' + Var('clang_format_revision'),
     'condition': 'build_with_chromium == False',
@@ -265,10 +278,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '156.0.8075.0/win64/chrome-win64.zip',
-        'sha256sum': 'cee0ca3f69c1a7c6d1507cf93480bfacb9a3dd6e9b913b55ca087f535582e582',
-        'size_bytes': 208854476,
-        'generation': 1790397665695800,
+        'object_name': '157.0.8091.0/win64/chrome-win64.zip',
+        'sha256sum': '4b57db1c3ce2c06bf1f2727bf2fbd3fae0de13706429adb69d7004eaccf32f53',
+        'size_bytes': 209567609,
+        'generation': 1791392906947247,
       },
     ],
   },
@@ -278,10 +291,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '156.0.8075.0/mac-x64/chrome-mac-x64.zip',
-        'sha256sum': 'c6caa7d1e03669b183c43b7ec3d67ad2368e2e0de2032ad7147fb55d4b031b3a',
-        'size_bytes': 205517833,
-        'generation': 1790407873617809,
+        'object_name': '157.0.8091.0/mac-x64/chrome-mac-x64.zip',
+        'sha256sum': 'def33391a83b7ea9d381fc1e42e3ba37be723da2ab7bf50b56818e303d30946c',
+        'size_bytes': 206622441,
+        'generation': 1791396801723239,
       },
     ],
   },
@@ -291,10 +304,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '156.0.8075.0/mac-arm64/chrome-mac-arm64.zip',
-        'sha256sum': 'fdfcff12e00d936e7f0071ec5426c9f54ecf74eebe5641f68b0cfefb1dab6c47',
-        'size_bytes': 194696295,
-        'generation': 1790398771390759,
+        'object_name': '157.0.8091.0/mac-arm64/chrome-mac-arm64.zip',
+        'sha256sum': '3fd0f44ec97c691eb2843c235f0aec551533d49786e1064d510e4465a7a5fec7',
+        'size_bytes': 196114888,
+        'generation': 1791388667993868,
       },
     ],
   },
@@ -304,10 +317,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '156.0.8075.0/linux64/chrome-linux64.zip',
-        'sha256sum': 'c2dd73f56466a8de6a737be6e3c68a91ac3fe1c6b21de016f153c703c29240df',
-        'size_bytes': 200226225,
-        'generation': 1790397327760677,
+        'object_name': '157.0.8091.0/linux64/chrome-linux64.zip',
+        'sha256sum': 'd95c4aa9942f3e75353eeb876908ede3abfde25e0363bfbd2b30b28987df3289',
+        'size_bytes': 201688611,
+        'generation': 1791388280146248,
       },
     ],
   },
@@ -422,6 +435,12 @@ hooks = [
     'pattern': '.',
     'condition': 'build_with_chromium == False',
     'action': [ 'vpython3', 'scripts/deps/fix_cft_permissions.py'],
+  },
+  {
+    'name': 'setup_devtools_ai_evals',
+    'pattern': '.',
+    'condition': 'checkout_devtools_ai_evals == True',
+    'action': ['vpython3', 'scripts/deps/setup_devtools_ai_evals.py'],
   },
 ]
 

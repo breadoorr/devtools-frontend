@@ -227,7 +227,7 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   {
     name: "create",
     signatures: [["?options"]],
-    receivers: ["CredentialsContainer","SemanticEmbedder"]
+    receivers: ["CredentialsContainer","DecisionModel","SemanticEmbedder"]
   },
   {
     name: "defineProperty",
@@ -2035,7 +2035,7 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   },
   {
     name: "read",
-    signatures: [["?options"]],
+    signatures: [["?formats"]],
     receivers: ["Clipboard"]
   },
   {
@@ -3220,7 +3220,7 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   {
     name: "focus",
     signatures: [["?options"]],
-    receivers: ["HTMLOrSVGElement","SVGElement","MathMLElement","HTMLElement"]
+    receivers: ["HTMLOrSVGElement","SVGElement","MathMLElement","HTMLElement","CSSPseudoElement","Focusable"]
   },
   {
     name: "assign",
@@ -3858,6 +3858,10 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   {
     name: "framebufferTextureMultiviewOVR",
     signatures: [["target","attachment","texture","level","baseViewIndex","numViews"]]
+  },
+  {
+    name: "startRendering",
+    signatures: [["?chunkSize"]]
   },
   {
     name: "convertToBlob",
@@ -8086,6 +8090,10 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
     signatures: [["decapsulationAlgorithm","decapsulationKey","ciphertext"]]
   },
   {
+    name: "requestFileHandle",
+    signatures: [["hash","?options"]]
+  },
+  {
     name: "userAgentAllowsProtocol",
     signatures: [["protocol"]]
   },
@@ -8302,6 +8310,14 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
     signatures: [["animatorName","effects","?timeline","?options"]]
   },
   {
+    name: "availability",
+    signatures: [["?options"]]
+  },
+  {
+    name: "decide",
+    signatures: [["input","?options"]]
+  },
+  {
     name: "LanguageModelToolCall",
     signatures: [["init"]]
   },
@@ -8312,10 +8328,6 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   {
     name: "LanguageModelToolError",
     signatures: [["init"]]
-  },
-  {
-    name: "availability",
-    signatures: [["?options"]]
   },
   {
     name: "embed",
@@ -8395,7 +8407,7 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   },
   {
     name: "createParserOptions",
-    signatures: [["input"]]
+    signatures: [["?input","...args"]]
   },
   {
     name: "createPolicy",
@@ -8972,11 +8984,15 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
     signatures: [["type","?eventInitDict"]]
   },
   {
-    name: "TouchEvent",
+    name: "ToolActivatedEvent",
     signatures: [["type","?eventInitDict"]]
   },
   {
-    name: "WebMCPEvent",
+    name: "ToolCancelEvent",
+    signatures: [["type","?eventInitDict"]]
+  },
+  {
+    name: "TouchEvent",
     signatures: [["type","?eventInitDict"]]
   },
   {
@@ -9026,54 +9042,6 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   {
     name: "timeout",
     signatures: [["milliseconds"]]
-  },
-  {
-    name: "beforeHTML",
-    signatures: [["html","?options"]]
-  },
-  {
-    name: "beforeHTMLUnsafe",
-    signatures: [["html","?options"]]
-  },
-  {
-    name: "afterHTML",
-    signatures: [["html","?options"]]
-  },
-  {
-    name: "afterHTMLUnsafe",
-    signatures: [["html","?options"]]
-  },
-  {
-    name: "replaceWithHTML",
-    signatures: [["html","?options"]]
-  },
-  {
-    name: "replaceWithHTMLUnsafe",
-    signatures: [["html","?options"]]
-  },
-  {
-    name: "streamBeforeHTML",
-    signatures: [["?options"]]
-  },
-  {
-    name: "streamBeforeHTMLUnsafe",
-    signatures: [["?options"]]
-  },
-  {
-    name: "streamAfterHTML",
-    signatures: [["?options"]]
-  },
-  {
-    name: "streamAfterHTMLUnsafe",
-    signatures: [["?options"]]
-  },
-  {
-    name: "streamReplaceWithHTML",
-    signatures: [["?options"]]
-  },
-  {
-    name: "streamReplaceWithHTMLUnsafe",
-    signatures: [["?options"]]
   },
   {
     name: "Comment",
@@ -9164,6 +9132,10 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
     signatures: [["?centerIfNeeded"]]
   },
   {
+    name: "Focusable",
+    signatures: [["target"]]
+  },
+  {
     name: "getBoxQuads",
     signatures: [["?options"]]
   },
@@ -9182,6 +9154,54 @@ export const NativeFunctions: readonly NativeFunctionValue[] = [
   {
     name: "MutationObserver",
     signatures: [["callback"]]
+  },
+  {
+    name: "beforeHTML",
+    signatures: [["html","?options"]]
+  },
+  {
+    name: "beforeHTMLUnsafe",
+    signatures: [["html","?options"]]
+  },
+  {
+    name: "afterHTML",
+    signatures: [["html","?options"]]
+  },
+  {
+    name: "afterHTMLUnsafe",
+    signatures: [["html","?options"]]
+  },
+  {
+    name: "replaceWithHTML",
+    signatures: [["html","?options"]]
+  },
+  {
+    name: "replaceWithHTMLUnsafe",
+    signatures: [["html","?options"]]
+  },
+  {
+    name: "streamBeforeHTML",
+    signatures: [["?options"]]
+  },
+  {
+    name: "streamBeforeHTMLUnsafe",
+    signatures: [["?options"]]
+  },
+  {
+    name: "streamAfterHTML",
+    signatures: [["?options"]]
+  },
+  {
+    name: "streamAfterHTMLUnsafe",
+    signatures: [["?options"]]
+  },
+  {
+    name: "streamReplaceWithHTML",
+    signatures: [["?options"]]
+  },
+  {
+    name: "streamReplaceWithHTMLUnsafe",
+    signatures: [["?options"]]
   },
   {
     name: "Observable",

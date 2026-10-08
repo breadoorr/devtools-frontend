@@ -12,7 +12,7 @@ import * as Common from '../../core/common/common.js';
 import * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as TextUtils from '../../core/text_utils/text_utils.js';
-import type * as Protocol from '../../generated/protocol.js';
+import * as Protocol from '../../generated/protocol.js';
 import * as Bindings from '../../models/bindings/bindings.js';
 import * as Breakpoints from '../../models/breakpoints/breakpoints.js';
 import * as Persistence from '../../models/persistence/persistence.js';
@@ -171,6 +171,61 @@ describe('NetworkNavigatorView', () => {
       assert.strictEqual(rootElement.firstChild()?.childCount(), 3);
       assert.isTrue(navigatorView.scriptsTree.firstChild()?.expanded);
       assert.isTrue(navigatorView.scriptsTree.firstChild()?.firstChild()?.selected);
+    });
+
+    it('does not add inline style stylesheets without sourceURL as standalone items in NetworkNavigatorView', () => {
+      void backend.universe.cssWorkspaceBinding;
+
+      const frameId = 'main-frame-id' as Protocol.Page.FrameId;
+      dispatchEvent(target, 'CSS.styleSheetAdded', {
+        header: {
+          styleSheetId: 'inline-sheet' as Protocol.DOM.StyleSheetId,
+          frameId,
+          sourceURL: 'http://example.com/',
+          origin: Protocol.CSS.StyleSheetOrigin.Regular,
+          title: '',
+          disabled: false,
+          isInline: true,
+          isMutable: false,
+          isConstructed: false,
+          startLine: 4,
+          startColumn: 8,
+          length: 25,
+          endLine: 4,
+          endColumn: 33,
+          hasSourceURL: false,
+        },
+      });
+      dispatchEvent(target, 'CSS.styleSheetAdded', {
+        header: {
+          styleSheetId: 'external-sheet' as Protocol.DOM.StyleSheetId,
+          frameId,
+          sourceURL: 'http://example.com/external.css',
+          origin: Protocol.CSS.StyleSheetOrigin.Regular,
+          title: '',
+          disabled: false,
+          isInline: false,
+          isMutable: false,
+          isConstructed: false,
+          startLine: 0,
+          startColumn: 0,
+          length: 40,
+          endLine: 2,
+          endColumn: 0,
+          hasSourceURL: false,
+        },
+      });
+
+      const navigatorView =
+          Sources.SourcesNavigator.NetworkNavigatorView.instance({forceNew: true, networkProjectManager});
+      const rootElement = navigatorView.scriptsTree.rootElement();
+      const exampleComNode = rootElement.firstChild();
+      assert.exists(exampleComNode);
+
+      const childTitles = exampleComNode.children().map(child => child.title);
+      assert.include(childTitles, 'external.css');
+      assert.lengthOf(childTitles.filter(title => title === '(index)'), 1);
+      assert.deepEqual(childTitles, ['(index)', 'gtm.js', 'external.css', 'favicon.ico']);
     });
   });
 
@@ -678,6 +733,9 @@ describe('FilesNavigatorView', () => {
     Persistence.Persistence.PersistenceImpl.instance({forceNew: true, workspace, breakpointManager});
     Persistence.NetworkPersistenceManager.NetworkPersistenceManager.instance({forceNew: true, workspace});
 
+    const actionRegistryInstance = UI.ActionRegistry.ActionRegistry.instance({forceNew: true});
+    UI.ShortcutRegistry.ShortcutRegistry.instance({forceNew: true, actionRegistry: actionRegistryInstance});
+
     const automaticFileSystemManager =
         sinon.createStubInstance(Persistence.AutomaticFileSystemManager.AutomaticFileSystemManager);
     sinon.stub(Persistence.AutomaticFileSystemManager.AutomaticFileSystemManager, 'instance')
@@ -689,6 +747,20 @@ describe('FilesNavigatorView', () => {
   afterEach(async () => {
     sinon.restore();
     await deinitializeGlobalVars();
+  });
+
+  it('shows context menu on placeholder', () => {
+    const navigatorView = new Sources.SourcesNavigator.FilesNavigatorView(networkProjectManager);
+    const contextMenuSpy = sinon.spy(navigatorView, 'handleContextMenu');
+    navigatorView.performUpdate();
+
+    const placeholderContainer = navigatorView.contentElement.querySelector('devtools-widget');
+    assert.exists(placeholderContainer);
+
+    const event = new MouseEvent('contextmenu', {bubbles: true});
+    placeholderContainer.dispatchEvent(event);
+
+    sinon.assert.calledOnce(contextMenuSpy);
   });
 
   it('shows unique names for file system UISourceCodes', async () => {

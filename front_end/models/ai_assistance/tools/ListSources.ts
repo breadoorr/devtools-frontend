@@ -13,6 +13,7 @@ import {
   isOriginAllowedByLock,
   type OriginLockCapability,
   type OriginLockState,
+  PermissionPrompt,
   resolveOriginFromLock,
   ToolName,
 } from './Tool.js';
@@ -35,16 +36,20 @@ interface SourceSummary {
 export class ListSourcesTool implements
     DataTool<Record<string, never>, {files: SourceSummary[]}, BaseToolCapability&OriginLockCapability> {
   readonly name: ToolName = ToolName.LIST_SOURCES;
+  readonly permissionPrompt: PermissionPrompt = PermissionPrompt.NEVER;
   readonly description: string =
       'Lists deployed and authored source files in the workspace (including source-mapped files) with their display name and unique numeric ID.';
 
   static lastSourceId = 0;
   static uiSourceCodeId: WeakMap<Workspace.UISourceCode.UISourceCode, number> =
       new WeakMap<Workspace.UISourceCode.UISourceCode, number>();
+  static idToUiSourceCode: Map<number, Workspace.UISourceCode.UISourceCode> =
+      new Map<number, Workspace.UISourceCode.UISourceCode>();
 
   static reset(): void {
     ListSourcesTool.lastSourceId = 0;
     ListSourcesTool.uiSourceCodeId = new WeakMap();
+    ListSourcesTool.idToUiSourceCode = new Map();
   }
 
   static getUISourceCodes(
@@ -76,7 +81,9 @@ export class ListSourcesTool implements
         if (!uiSourceCodes.get(url) || uiSourceCode.contentType().isFromSourceMap()) {
           uiSourceCodes.set(url, uiSourceCode);
           if (!ListSourcesTool.uiSourceCodeId.has(uiSourceCode)) {
-            ListSourcesTool.uiSourceCodeId.set(uiSourceCode, ++ListSourcesTool.lastSourceId);
+            const id = ++ListSourcesTool.lastSourceId;
+            ListSourcesTool.uiSourceCodeId.set(uiSourceCode, id);
+            ListSourcesTool.idToUiSourceCode.set(id, uiSourceCode);
           }
         }
       }
@@ -88,14 +95,15 @@ export class ListSourcesTool implements
   static getSourceById(
       id: number,
       originLock: OriginLockState,
-      // eslint-disable-next-line @devtools/no-instance-of-migrated-singletons
-      workspace: Workspace.Workspace.WorkspaceImpl = Workspace.Workspace.WorkspaceImpl.instance(),
       ): Workspace.UISourceCode.UISourceCode|undefined {
     if (!Number.isInteger(id) || id <= 0) {
       return undefined;
     }
-    return ListSourcesTool.getUISourceCodes(originLock, workspace)
-        .find(file => ListSourcesTool.uiSourceCodeId.get(file) === id);
+    const file = ListSourcesTool.idToUiSourceCode.get(id);
+    if (!file || !isOriginAllowedByLock(originLock, file.securityOrigin())) {
+      return undefined;
+    }
+    return file;
   }
 
   readonly parameters: Host.AidaClient.FunctionObjectParam<never> = {

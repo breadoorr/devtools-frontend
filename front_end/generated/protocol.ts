@@ -4066,6 +4066,18 @@ export namespace CSS {
     forced: boolean;
   }
 
+  export interface ForcePositionTryOptionRequest {
+    /**
+     * The element id for which to force the position-try option.
+     */
+    nodeId: DOM.NodeId;
+    /**
+     * The 1-based index of the position-try fallback option, 0 for base position (no fallback),
+     * or omitted to clear the forced state.
+     */
+    index?: integer;
+  }
+
   export interface GetBackgroundColorsRequest {
     /**
      * Id of the node to get background colors for.
@@ -8699,6 +8711,16 @@ export namespace FileSystem {
      * Returns the directory object at the path.
      */
     directory: Directory;
+  }
+}
+
+/**
+ * This domain provides commands to trigger the "Find in page" feature.
+ */
+export namespace FindInPage {
+
+  export interface FindFirstRequest {
+    query: string;
   }
 }
 
@@ -14808,6 +14830,7 @@ export namespace Page {
     PrivateStateTokenRedemption = 'private-state-token-redemption',
     PublickeyCredentialsCreate = 'publickey-credentials-create',
     PublickeyCredentialsGet = 'publickey-credentials-get',
+    PublickeyCredentialsRemoteClientDataJson = 'publickey-credentials-remote-client-data-json',
     Rewriter = 'rewriter',
     ScreenWakeLock = 'screen-wake-lock',
     Serial = 'serial',
@@ -20720,6 +20743,11 @@ export namespace Debugger {
     WasmExpressionStack = 'wasm-expression-stack',
   }
 
+  export const enum ScopeEmptyReason {
+    NoVariables = 'no-variables',
+    AllUnavailable = 'all-unavailable',
+  }
+
   /**
    * Scope description.
    */
@@ -20744,13 +20772,13 @@ export namespace Debugger {
      */
     endLocation?: Location;
     /**
-     * True if the scope does not declare any variables or have a runtime context.
-     * Only present if true.
+     * Present if the scope has no variable values to show. Absent means that
+     * the scope declares at least one variable with an available value.
      * Empty scopes are retained in the scope chain because
      * they can be targeted via `evaluateOnCallFrame` (using `scopeNumber`) or
      * matched against scopes in source maps.
      */
-    empty?: boolean;
+    emptyReason?: ScopeEmptyReason;
   }
 
   /**
@@ -21377,6 +21405,12 @@ export namespace Debugger {
      * The skipList specifies location ranges that should be skipped on step over.
      */
     skipList?: LocationRange[];
+    /**
+     * Functions whose source range lies within one of the enterRanges are
+     * entered as if by stepInto, even when they are called (directly or
+     * indirectly) from a call that is stepped over.
+     */
+    enterRanges?: LocationRange[];
   }
 
   /**

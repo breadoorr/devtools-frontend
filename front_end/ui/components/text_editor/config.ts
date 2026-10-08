@@ -92,7 +92,7 @@ export class DynamicSetting<T> {
 }
 
 export const tabMovesFocus: DynamicSetting<boolean> =
-    DynamicSetting.bool('text-editor-tab-moves-focus', [], CM.keymap.of([{
+    DynamicSetting.bool(SettingsUI.SourcesSettings.textEditorTabMovesFocusSettingDescriptor, [], CM.keymap.of([{
       key: 'Tab',
       run: (view: CM.EditorView) => view.state.doc.length ? CM.indentMore(view) : false,
       shift: (view: CM.EditorView) => view.state.doc.length ? CM.indentLess(view) : false,
@@ -183,7 +183,7 @@ function announceSelectedCompletionInfo(view: CM.EditorView): void {
 }
 
 export const autocompletion: DynamicSetting<boolean> = new DynamicSetting<boolean>(
-    'text-editor-autocompletion',
+    SettingsUI.SourcesSettings.textEditorAutocompletionSettingDescriptor,
     (activateOnTyping: boolean) => [CM.autocompletion({
       activateOnTyping,
       icons: false,
@@ -209,22 +209,24 @@ export const autocompletion: DynamicSetting<boolean> = new DynamicSetting<boolea
                                     ]))]);
 
 export const bracketMatching: DynamicSetting<boolean> =
-    DynamicSetting.bool('text-editor-bracket-matching', CM.bracketMatching());
+    DynamicSetting.bool(SettingsUI.SourcesSettings.textEditorBracketMatchingSettingDescriptor, CM.bracketMatching());
 
-export const codeFolding: DynamicSetting<boolean> = DynamicSetting.bool('text-editor-code-folding', [
-  CM.foldGutter({
-    markerDOM(open: boolean): HTMLElement {
-      const iconName = open ? 'triangle-down' : 'triangle-right';
-      const icon = new Icon();
-      icon.setAttribute('class', open ? 'cm-foldGutterElement' : 'cm-foldGutterElement cm-foldGutterElement-folded');
-      icon.setAttribute('jslog', `${VisualLogging.expand().track({click: true})}`);
-      icon.name = iconName;
-      icon.classList.add('small');
-      return icon;
-    },
-  }),
-  CM.keymap.of(CM.foldKeymap),
-]);
+export const codeFolding: DynamicSetting<boolean> =
+    DynamicSetting.bool(SettingsUI.SourcesSettings.textEditorCodeFoldingSettingDescriptor, [
+      CM.foldGutter({
+        markerDOM(open: boolean): HTMLElement {
+          const iconName = open ? 'triangle-down' : 'triangle-right';
+          const icon = new Icon();
+          icon.setAttribute('class',
+                            open ? 'cm-foldGutterElement' : 'cm-foldGutterElement cm-foldGutterElement-folded');
+          icon.setAttribute('jslog', `${VisualLogging.expand().track({click: true})}`);
+          icon.name = iconName;
+          icon.classList.add('small');
+          return icon;
+        },
+      }),
+      CM.keymap.of(CM.foldKeymap),
+    ]);
 
 const AutoDetectIndent = CM.StateField.define<string>({
   create: state => detectIndentation(state.doc),
@@ -250,7 +252,7 @@ function detectIndentation(doc: CM.Text): string {
 }
 
 export const autoDetectIndent: DynamicSetting<boolean> =
-    DynamicSetting.bool('text-editor-auto-detect-indent', AutoDetectIndent);
+    DynamicSetting.bool(SettingsUI.SourcesSettings.textEditorAutoDetectIndentSettingDescriptor, AutoDetectIndent);
 
 function matcher(decorator: CM.MatchDecorator): CM.Extension {
   return CM.ViewPlugin.define(
@@ -295,7 +297,7 @@ const showTrailingWhitespace = matcher(new CM.MatchDecorator({
 }));
 
 export const showWhitespace: DynamicSetting<string> =
-    new DynamicSetting<string>('show-whitespaces-in-editor', value => {
+    new DynamicSetting<string>(SettingsUI.SourcesSettings.showWhitespacesInEditorSettingDescriptor, value => {
       if (value === 'all') {
         return showAllWhitespace;
       }
@@ -320,10 +322,11 @@ function getIndentUnit(indent: string): CM.Extension {
 
 export const indentUnit: DynamicSetting<string> = new DynamicSetting<string>('text-editor-indent', getIndentUnit);
 
-export const domWordWrap: DynamicSetting<boolean> = DynamicSetting.bool('dom-word-wrap', CM.EditorView.lineWrapping);
+export const domWordWrap: DynamicSetting<boolean> =
+    DynamicSetting.bool(SettingsUI.ElementsSettings.domWordWrapSettingDescriptor, CM.EditorView.lineWrapping);
 
 export const sourcesWordWrap: DynamicSetting<boolean> =
-    DynamicSetting.bool('sources.word-wrap', CM.EditorView.lineWrapping);
+    DynamicSetting.bool(SettingsUI.SourcesSettings.sourcesWordWrapSettingDescriptor, CM.EditorView.lineWrapping);
 
 function detectLineSeparator(text: string): CM.Extension {
   if (/\r\n/.test(text) && !/(^|[^\r])\n/.test(text)) {
@@ -391,11 +394,12 @@ export function baseConfiguration(text: string|CM.Text): CM.Extension {
   ];
 }
 
-export const closeBrackets: DynamicSetting<boolean> = DynamicSetting.bool('text-editor-bracket-closing', [
-  CM.html.autoCloseTags,
-  CM.closeBrackets(),
-  CM.keymap.of(CM.closeBracketsKeymap),
-]);
+export const closeBrackets: DynamicSetting<boolean> =
+    DynamicSetting.bool(SettingsUI.SourcesSettings.textEditorBracketClosingSettingDescriptor, [
+      CM.html.autoCloseTags,
+      CM.closeBrackets(),
+      CM.keymap.of(CM.closeBracketsKeymap),
+    ]);
 
 // Root editor tooltips at the top of the document, creating a special
 // element with the editor styles mounted in it for them. This is

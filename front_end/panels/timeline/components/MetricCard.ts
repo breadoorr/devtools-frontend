@@ -1,16 +1,17 @@
 // Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-/* eslint-disable @devtools/no-lit-render-outside-of-view */
+
+import '../../../ui/components/tooltips/tooltips.js';
 
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Platform from '../../../core/platform/platform.js';
 import * as CrUXManager from '../../../models/crux-manager/crux-manager.js';
 import type * as Trace from '../../../models/trace/trace.js';
 import * as Buttons from '../../../ui/components/buttons/buttons.js';
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
 import * as UIHelpers from '../../../ui/helpers/helpers.js';
-import * as Lit from '../../../ui/lit/lit.js';
+import * as UI from '../../../ui/legacy/legacy.js';
+import {html, type LitTemplate, nothing, render} from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 
 import metricCardStyles from './metricCard.css.js';
@@ -26,8 +27,6 @@ import {
   rateMetric,
   renderMetricValue,
 } from './Utils.js';
-
-const {html, nothing} = Lit;
 
 const UIStrings = {
   /**
@@ -148,242 +147,141 @@ const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
 export type SubpartTable = Array<[string, Trace.Types.Timing.Milli, Trace.Types.Timing.Milli?]>;
 
-export interface MetricCardData {
+type Metric = 'LCP'|'CLS'|'INP';
+
+function getTitle(metric: Metric): string {
+  switch (metric) {
+    case 'LCP':
+      return i18n.i18n.lockedString('Largest Contentful Paint (LCP)');
+    case 'CLS':
+      return i18n.i18n.lockedString('Cumulative Layout Shift (CLS)');
+    case 'INP':
+      return i18n.i18n.lockedString('Interaction to Next Paint (INP)');
+  }
+}
+
+function getThresholds(metric: Metric): MetricThresholds {
+  switch (metric) {
+    case 'LCP':
+      return LCP_THRESHOLDS;
+    case 'CLS':
+      return CLS_THRESHOLDS;
+    case 'INP':
+      return INP_THRESHOLDS;
+  }
+}
+
+function getFormatFn(metric: Metric): (value: number) => string {
+  switch (metric) {
+    case 'LCP':
+      return v => {
+        const micro = (v * 1000) as Platform.Timing.MicroSeconds;
+        return i18n.TimeUtilities.formatMicroSecondsAsSeconds(micro);
+      };
+    case 'CLS':
+      return v => v === 0 ? '0' : v.toFixed(2);
+    case 'INP':
+      return v => i18n.TimeUtilities.preciseMillisToString(v);
+  }
+}
+
+function getHelpLink(metric: Metric): Platform.DevToolsPath.UrlString {
+  switch (metric) {
+    case 'LCP':
+      return 'https://web.dev/articles/lcp' as Platform.DevToolsPath.UrlString;
+    case 'CLS':
+      return 'https://web.dev/articles/cls' as Platform.DevToolsPath.UrlString;
+    case 'INP':
+      return 'https://web.dev/articles/inp' as Platform.DevToolsPath.UrlString;
+  }
+}
+
+function getHelpTooltip(metric: Metric): string {
+  switch (metric) {
+    case 'LCP':
+      return i18nString(UIStrings.lcpHelpTooltip);
+    case 'CLS':
+      return i18nString(UIStrings.clsHelpTooltip);
+    case 'INP':
+      return i18nString(UIStrings.inpHelpTooltip);
+  }
+}
+
+function bucketIndexForRating(rating: MetricRating): number {
+  switch (rating) {
+    case 'good':
+      return 0;
+    case 'needs-improvement':
+      return 1;
+    case 'poor':
+      return 2;
+  }
+}
+
+function getBarWidthForRating(histogram: CrUXManager.MetricResponse['histogram']|undefined,
+                              rating: MetricRating): string {
+  const density = histogram?.[bucketIndexForRating(rating)].density || 0;
+  const percent = Math.round(density * 100);
+  return `${percent}%`;
+}
+
+function getPercentLabelForRating(histogram: CrUXManager.MetricResponse['histogram']|undefined,
+                                  rating: MetricRating): string {
+  if (histogram === undefined) {
+    return '-';
+  }
+
+  // A missing density value should be interpreted as 0%
+  const density = histogram[bucketIndexForRating(rating)].density || 0;
+  const percent = Math.round(density * 100);
+  return i18nString(UIStrings.percentage, {PH1: percent});
+}
+
+interface ViewInput {
   metric: 'LCP'|'CLS'|'INP';
   localValue?: number;
-  fieldValue?: number|string;
+  fieldValue?: number;
   histogram?: CrUXManager.MetricResponse['histogram'];
-  tooltipContainer?: HTMLElement;
   subparts?: SubpartTable;
   warnings?: string[];
 }
 
-export class MetricCard extends HTMLElement {
-  readonly #shadow = this.attachShadow({mode: 'open'});
-
-  constructor() {
-    super();
-
-    this.#render();
-  }
-
-  #tooltipEl?: HTMLElement;
-
-  #data: MetricCardData = {
-    metric: 'LCP',
-  };
-
-  set data(data: MetricCardData) {
-    this.#data = data;
-    void ComponentHelpers.ScheduledRender.scheduleRender(this, this.#render);
-  }
-
-  connectedCallback(): void {
-    void ComponentHelpers.ScheduledRender.scheduleRender(this, this.#render);
-  }
-
-  #hideTooltipOnEsc = (event: KeyboardEvent): void => {
-    if (Platform.KeyboardUtilities.isEscKey(event)) {
-      event.stopPropagation();
-      this.#hideTooltip();
-    }
-  };
-
-  #hideTooltipOnMouseLeave(event: Event): void {
-    const target = event.target as HTMLElement;
-    if (target?.hasFocus()) {
-      return;
-    }
-
-    this.#hideTooltip();
-  }
-
-  #hideTooltipOnFocusOut(event: FocusEvent): void {
-    const target = event.target as HTMLElement;
-    if (target?.hasFocus()) {
-      return;
-    }
-
-    const relatedTarget = event.relatedTarget;
-    if (relatedTarget instanceof Node && target.contains(relatedTarget)) {
-      // `focusout` bubbles so we should get another event once focus leaves `relatedTarget`
-      return;
-    }
-
-    this.#hideTooltip();
-  }
-
-  #hideTooltip(): void {
-    const tooltipEl = this.#tooltipEl;
-    if (!tooltipEl) {
-      return;
-    }
-
-    document.body.removeEventListener('keydown', this.#hideTooltipOnEsc);
-
-    tooltipEl.style.removeProperty('left');
-    tooltipEl.style.removeProperty('visibility');
-    tooltipEl.style.removeProperty('display');
-    tooltipEl.style.removeProperty('transition-delay');
-  }
-
-  #showTooltip(delayMs = 0): void {
-    const tooltipEl = this.#tooltipEl;
-    if (!tooltipEl || tooltipEl.style.visibility || tooltipEl.style.display) {
-      return;
-    }
-
-    document.body.addEventListener('keydown', this.#hideTooltipOnEsc);
-
-    tooltipEl.style.display = 'block';
-    tooltipEl.style.transitionDelay = `${Math.round(delayMs)}ms`;
-
-    const container = this.#data.tooltipContainer;
-    if (!container) {
-      return;
-    }
-
-    const containerBox = container.getBoundingClientRect();
-    tooltipEl.style.setProperty('--tooltip-container-width', `${Math.round(containerBox.width)}px`);
-
-    requestAnimationFrame(() => {
-      let offset = 0;
-
-      const tooltipBox = tooltipEl.getBoundingClientRect();
-
-      const rightDiff = tooltipBox.right - containerBox.right;
-      const leftDiff = tooltipBox.left - containerBox.left;
-
-      if (leftDiff < 0) {
-        offset = Math.round(leftDiff);
-      } else if (rightDiff > 0) {
-        offset = Math.round(rightDiff);
-      }
-
-      tooltipEl.style.left = `calc(50% - ${offset}px)`;
-      tooltipEl.style.visibility = 'visible';
-    });
-  }
-
-  #getTitle(): string {
-    switch (this.#data.metric) {
-      case 'LCP':
-        return i18n.i18n.lockedString('Largest Contentful Paint (LCP)');
-      case 'CLS':
-        return i18n.i18n.lockedString('Cumulative Layout Shift (CLS)');
-      case 'INP':
-        return i18n.i18n.lockedString('Interaction to Next Paint (INP)');
-    }
-  }
-
-  #getThresholds(): MetricThresholds {
-    switch (this.#data.metric) {
-      case 'LCP':
-        return LCP_THRESHOLDS;
-      case 'CLS':
-        return CLS_THRESHOLDS;
-      case 'INP':
-        return INP_THRESHOLDS;
-    }
-  }
-
-  #getFormatFn(): (value: number) => string {
-    switch (this.#data.metric) {
-      case 'LCP':
-        return v => {
-          const micro = (v * 1000) as Platform.Timing.MicroSeconds;
-          return i18n.TimeUtilities.formatMicroSecondsAsSeconds(micro);
-        };
-      case 'CLS':
-        return v => v === 0 ? '0' : v.toFixed(2);
-      case 'INP':
-        return v => i18n.TimeUtilities.preciseMillisToString(v);
-    }
-  }
-
-  #getHelpLink(): Platform.DevToolsPath.UrlString {
-    switch (this.#data.metric) {
-      case 'LCP':
-        return 'https://web.dev/articles/lcp' as Platform.DevToolsPath.UrlString;
-      case 'CLS':
-        return 'https://web.dev/articles/cls' as Platform.DevToolsPath.UrlString;
-      case 'INP':
-        return 'https://web.dev/articles/inp' as Platform.DevToolsPath.UrlString;
-    }
-  }
-
-  #getHelpTooltip(): string {
-    switch (this.#data.metric) {
-      case 'LCP':
-        return i18nString(UIStrings.lcpHelpTooltip);
-      case 'CLS':
-        return i18nString(UIStrings.clsHelpTooltip);
-      case 'INP':
-        return i18nString(UIStrings.inpHelpTooltip);
-    }
-  }
-
-  #getLocalValue(): number|undefined {
-    const {localValue} = this.#data;
-    if (localValue === undefined) {
-      return;
-    }
-
-    return localValue;
-  }
-
-  #getFieldValue(): number|undefined {
-    let {fieldValue} = this.#data;
-    if (fieldValue === undefined) {
-      return;
-    }
-
-    if (typeof fieldValue === 'string') {
-      fieldValue = Number(fieldValue);
-    }
-
-    if (!Number.isFinite(fieldValue)) {
-      return;
-    }
-
-    return fieldValue;
-  }
+type View = (input: ViewInput, output: object, target: HTMLElement) => void;
+export const DEFAULT_VIEW: View = (input, output, target) => {
+  const {metric, localValue, fieldValue} = input;
 
   /**
    * Returns if the local value is better/worse/similar compared to field.
    */
-  #getCompareRating(): CompareRating|undefined {
-    const localValue = this.#getLocalValue();
-    const fieldValue = this.#getFieldValue();
+  function getCompareRating(): CompareRating|undefined {
     if (localValue === undefined || fieldValue === undefined) {
       return;
     }
 
-    return determineCompareRating(this.#data.metric, localValue, fieldValue);
+    return determineCompareRating(metric, localValue, fieldValue);
   }
 
-  #renderCompareString(): Lit.LitTemplate {
-    const localValue = this.#getLocalValue();
+  function renderCompareString(): LitTemplate {
     if (localValue === undefined) {
-      if (this.#data.metric === 'INP') {
+      if (metric === 'INP') {
         return html`
           <div class="compare-text">${i18nString(UIStrings.interactToMeasure)}</div>
         `;
       }
-      return Lit.nothing;
+      return nothing;
     }
 
-    const compare = this.#getCompareRating();
-    const rating = rateMetric(localValue, this.#getThresholds());
+    const compare = getCompareRating();
+    const rating = rateMetric(localValue, getThresholds(metric));
 
-    const valueEl = renderMetricValue(
-        this.#getMetricValueLogContext(true), localValue, this.#getThresholds(), this.#getFormatFn(), {dim: true});
+    const valueEl = renderMetricValue(getMetricValueLogContext(true), localValue, getThresholds(metric),
+                                      getFormatFn(metric), {dim: true});
 
     // clang-format off
     return html`
       <div class="compare-text">
         ${renderCompareText({
-          metric: i18n.i18n.lockedString(this.#data.metric),
+          metric: i18n.i18n.lockedString(metric),
           rating,
           compare,
           localValue: valueEl,
@@ -393,14 +291,13 @@ export class MetricCard extends HTMLElement {
     // clang-format on
   }
 
-  #renderEnvironmentRecommendations(): Lit.LitTemplate {
-    const compare = this.#getCompareRating();
+  function renderEnvironmentRecommendations(): LitTemplate {
+    const compare = getCompareRating();
     if (!compare || compare === 'similar') {
-      return Lit.nothing;
+      return nothing;
     }
 
     const recs: string[] = [];
-    const metric = this.#data.metric;
 
     // Recommend using throttling
     if (metric === 'LCP' && compare === 'better') {
@@ -431,7 +328,7 @@ export class MetricCard extends HTMLElement {
     }
 
     if (!recs.length) {
-      return Lit.nothing;
+      return nothing;
     }
 
     return html`
@@ -442,80 +339,48 @@ export class MetricCard extends HTMLElement {
     `;
   }
 
-  #getMetricValueLogContext(isLocal: boolean): string {
-    return `timeline.landing.${isLocal ? 'local' : 'field'}-${this.#data.metric.toLowerCase()}`;
+  function getMetricValueLogContext(isLocal: boolean): string {
+    return `timeline.landing.${isLocal ? 'local' : 'field'}-${input.metric.toLowerCase()}`;
   }
 
-  #renderDetailedCompareString(): Lit.LitTemplate {
-    const localValue = this.#getLocalValue();
+  function renderDetailedCompareString(): LitTemplate {
     if (localValue === undefined) {
-      if (this.#data.metric === 'INP') {
+      if (metric === 'INP') {
         return html`
           <div class="detailed-compare-text">${i18nString(UIStrings.interactToMeasure)}</div>
         `;
       }
-      return Lit.nothing;
+      return nothing;
     }
 
-    const localRating = rateMetric(localValue, this.#getThresholds());
+    const localRating = rateMetric(localValue, getThresholds(metric));
 
-    const fieldValue = this.#getFieldValue();
-    const fieldRating = fieldValue !== undefined ? rateMetric(fieldValue, this.#getThresholds()) : undefined;
+    const fieldRating = fieldValue !== undefined ? rateMetric(fieldValue, getThresholds(metric)) : undefined;
 
-    const localValueEl = renderMetricValue(
-        this.#getMetricValueLogContext(true), localValue, this.#getThresholds(), this.#getFormatFn(), {dim: true});
-    const fieldValueEl = renderMetricValue(
-        this.#getMetricValueLogContext(false), fieldValue, this.#getThresholds(), this.#getFormatFn(), {dim: true});
+    const localValueEl = renderMetricValue(getMetricValueLogContext(true), localValue, getThresholds(metric),
+                                           getFormatFn(metric), {dim: true});
+    const fieldValueEl = renderMetricValue(getMetricValueLogContext(false), fieldValue, getThresholds(metric),
+                                           getFormatFn(metric), {dim: true});
 
     // clang-format off
     return html`
       <div class="detailed-compare-text">${renderDetailedCompareText({
-        metric: i18n.i18n.lockedString(this.#data.metric),
+        metric: i18n.i18n.lockedString(metric),
         localRating,
         fieldRating,
         localValue: localValueEl,
         fieldValue: fieldValueEl,
-        percent: this.#getPercentLabelForRating(localRating),
+        percent: getPercentLabelForRating(input.histogram, localRating),
       })}</div>
     `;
     // clang-format on
   }
 
-  #bucketIndexForRating(rating: MetricRating): number {
-    switch (rating) {
-      case 'good':
-        return 0;
-      case 'needs-improvement':
-        return 1;
-      case 'poor':
-        return 2;
-    }
-  }
-
-  #getBarWidthForRating(rating: MetricRating): string {
-    const histogram = this.#data.histogram;
-    const density = histogram?.[this.#bucketIndexForRating(rating)].density || 0;
-    const percent = Math.round(density * 100);
-    return `${percent}%`;
-  }
-
-  #getPercentLabelForRating(rating: MetricRating): string {
-    const histogram = this.#data.histogram;
-    if (histogram === undefined) {
-      return '-';
-    }
-
-    // A missing density value should be interpreted as 0%
-    const density = histogram[this.#bucketIndexForRating(rating)].density || 0;
-    const percent = Math.round(density * 100);
-    return i18nString(UIStrings.percentage, {PH1: percent});
-  }
-
-  #renderFieldHistogram(): Lit.LitTemplate {
+  function renderFieldHistogram(): LitTemplate {
     const fieldEnabled = CrUXManager.CrUXManager.instance().getConfigSetting().get().enabled;
 
-    const format = this.#getFormatFn();
-    const thresholds = this.#getThresholds();
+    const format = getFormatFn(metric);
+    const thresholds = getThresholds(metric);
 
     // clang-format off
     const goodLabel = html`
@@ -554,20 +419,20 @@ export class MetricCard extends HTMLElement {
     return html`
       <div class="bucket-summaries histogram" jslog=${VisualLogging.canvas('metric-histogram')}>
         ${goodLabel}
-        <div class="histogram-bar good-bg" style="width: ${this.#getBarWidthForRating('good')}"></div>
-        <div class="histogram-percent">${this.#getPercentLabelForRating('good')}</div>
+        <div class="histogram-bar good-bg" style="width: ${getBarWidthForRating(input.histogram, 'good')}"></div>
+        <div class="histogram-percent">${getPercentLabelForRating(input.histogram, 'good')}</div>
         ${needsImprovementLabel}
-        <div class="histogram-bar needs-improvement-bg" style="width: ${this.#getBarWidthForRating('needs-improvement')}"></div>
-        <div class="histogram-percent">${this.#getPercentLabelForRating('needs-improvement')}</div>
+        <div class="histogram-bar needs-improvement-bg" style="width: ${getBarWidthForRating(input.histogram, 'needs-improvement')}"></div>
+        <div class="histogram-percent">${getPercentLabelForRating(input.histogram, 'needs-improvement')}</div>
         ${poorLabel}
-        <div class="histogram-bar poor-bg" style="width: ${this.#getBarWidthForRating('poor')}"></div>
-        <div class="histogram-percent">${this.#getPercentLabelForRating('poor')}</div>
+        <div class="histogram-bar poor-bg" style="width: ${getBarWidthForRating(input.histogram, 'poor')}"></div>
+        <div class="histogram-percent">${getPercentLabelForRating(input.histogram, 'poor')}</div>
       </div>
     `;
     // clang-format on
   }
 
-  #renderSubpartTable(subparts: SubpartTable): Lit.LitTemplate {
+  function renderSubpartTable(subparts: SubpartTable): LitTemplate {
     const hasFieldData = subparts.every(subpart => subpart[2] !== undefined);
 
     // clang-format off
@@ -599,40 +464,30 @@ export class MetricCard extends HTMLElement {
     // clang-format on
   }
 
-  #render = (): void => {
-    const fieldEnabled = CrUXManager.CrUXManager.instance().getConfigSetting().get().enabled;
-    const helpLink = this.#getHelpLink();
+  const fieldEnabled = CrUXManager.CrUXManager.instance().getConfigSetting().get().enabled;
+  const helpLink = getHelpLink(metric);
+  const thresholds = getThresholds(metric);
+  const formatFn = getFormatFn(metric);
 
-    const localValue = this.#getLocalValue();
-    const fieldValue = this.#getFieldValue();
-    const thresholds = this.#getThresholds();
-    const formatFn = this.#getFormatFn();
+  const localValueEl = renderMetricValue(getMetricValueLogContext(true), localValue, thresholds, formatFn);
+  const fieldValueEl = renderMetricValue(getMetricValueLogContext(false), fieldValue, thresholds, formatFn);
 
-    const localValueEl = renderMetricValue(this.#getMetricValueLogContext(true), localValue, thresholds, formatFn);
-    const fieldValueEl = renderMetricValue(this.#getMetricValueLogContext(false), fieldValue, thresholds, formatFn);
-
-    // clang-format off
-    const output = html`
+  // clang-format off
+  render(html`
       <style>${metricCardStyles}</style>
       <style>${metricValueStyles}</style>
-      <div class="metric-card" jslog=${VisualLogging.section(Platform.StringUtilities.toKebabCase(this.#data.metric))}>
+      <div class="metric-card" jslog=${VisualLogging.section(Platform.StringUtilities.toKebabCase(metric))}>
         <h3 class="title">
-          ${this.#getTitle()}
+          ${getTitle(metric)}
           <devtools-button
             class="title-help"
-            title=${this.#getHelpTooltip()}
+            title=${getHelpTooltip(metric)}
             .iconName=${'help'}
             .variant=${Buttons.Button.Variant.ICON}
             @click=${() => UIHelpers.openInNewTab(helpLink)}
           ></devtools-button>
         </h3>
-        <div tabindex="0" class="metric-values-section"
-          @mouseenter=${() => this.#showTooltip(500)}
-          @mouseleave=${this.#hideTooltipOnMouseLeave}
-          @focusin=${this.#showTooltip}
-          @focusout=${this.#hideTooltipOnFocusOut}
-          aria-describedby="tooltip"
-        >
+        <div tabindex="0" class="metric-values-section" aria-details="tooltip">
           <div class="metric-source-block">
             <div class="metric-source-value" id="local-value">${localValueEl}</div>
             ${fieldEnabled ? html`<div class="metric-source-label">${i18nString(UIStrings.localValue)}</div>` : nothing}
@@ -643,47 +498,139 @@ export class MetricCard extends HTMLElement {
               <div class="metric-source-label">${i18nString(UIStrings.field75thPercentile)}</div>
             </div>
           `: nothing}
-          <div
-            id="tooltip"
-            class="tooltip"
-            role="tooltip"
-            aria-label=${i18nString(UIStrings.viewCardDetails)}
-            ${Lit.Directives.ref(el => {
-              if (el instanceof HTMLElement) {
-                this.#tooltipEl = el as HTMLElement;
-              }
-            })}
-          >
-            <div class="tooltip-scroll">
-              <div class="tooltip-contents">
-                <div>
-                  ${this.#renderDetailedCompareString()}
-                  <hr class="divider">
-                  ${this.#renderFieldHistogram()}
-                  ${localValue && this.#data.subparts ? this.#renderSubpartTable(this.#data.subparts) : nothing}
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
+        <devtools-tooltip
+          id="tooltip"
+          variant="rich"
+          hover-delay="500"
+          aria-label=${i18nString(UIStrings.viewCardDetails)}
+        >
+          <div class="tooltip-contents">
+            ${renderDetailedCompareString()}
+            <hr class="divider">
+            ${renderFieldHistogram()}
+            ${localValue && input.subparts ? renderSubpartTable(input.subparts) : nothing}
+          </div>
+        </devtools-tooltip>
         ${fieldEnabled ? html`<hr class="divider">` : nothing}
-        ${this.#renderCompareString()}
-        ${this.#data.warnings?.map(warning => html`
+        ${renderCompareString()}
+        ${input.warnings?.map(warning => html`
           <div class="warning">${warning}</div>
         `)}
-        ${this.#renderEnvironmentRecommendations()}
+        ${renderEnvironmentRecommendations()}
         <slot name="extra-info"></slot>
       </div>
-    `;
-    Lit.render(output, this.#shadow, {host: this});
-  };
+    `, target);
   // clang-format on
-}
+};
 
-customElements.define('devtools-metric-card', MetricCard);
+export class MetricCard extends UI.Widget.VBox {
+  readonly #view: View;
+  #metric: Metric = 'LCP';
+  #localValue?: number;
+  #fieldValue?: number|string;
+  #histogram?: CrUXManager.MetricResponse['histogram'];
+  #subparts?: SubpartTable;
+  #warnings?: string[];
 
-declare global {
-  interface HTMLElementTagNameMap {
-    'devtools-metric-card': MetricCard;
+  constructor(target?: HTMLElement, view: View = DEFAULT_VIEW) {
+    super(target, {useShadowDom: true});
+    this.#view = view;
+  }
+
+  get metric(): Metric {
+    return this.#metric;
+  }
+
+  set metric(metric: Metric) {
+    if (this.#metric === metric) {
+      return;
+    }
+    this.#metric = metric;
+    this.requestUpdate();
+  }
+
+  get localValue(): number|undefined {
+    return this.#localValue;
+  }
+
+  set localValue(localValue: number|undefined) {
+    if (this.#localValue === localValue) {
+      return;
+    }
+    this.#localValue = localValue;
+    this.requestUpdate();
+  }
+
+  get fieldValue(): number|string|undefined {
+    return this.#fieldValue;
+  }
+
+  set fieldValue(fieldValue: number|string|undefined) {
+    if (this.#fieldValue === fieldValue) {
+      return;
+    }
+    this.#fieldValue = fieldValue;
+    this.requestUpdate();
+  }
+
+  get histogram(): CrUXManager.MetricResponse['histogram']|undefined {
+    return this.#histogram;
+  }
+
+  set histogram(histogram: CrUXManager.MetricResponse['histogram']|undefined) {
+    if (this.#histogram === histogram) {
+      return;
+    }
+    this.#histogram = histogram;
+    this.requestUpdate();
+  }
+
+  get subparts(): SubpartTable|undefined {
+    return this.#subparts;
+  }
+
+  set subparts(subparts: SubpartTable|undefined) {
+    if (this.#subparts === subparts) {
+      return;
+    }
+    this.#subparts = subparts;
+    this.requestUpdate();
+  }
+
+  get warnings(): string[]|undefined {
+    return this.#warnings;
+  }
+
+  set warnings(warnings: string[]|undefined) {
+    if (this.#warnings === warnings) {
+      return;
+    }
+    this.#warnings = warnings;
+    this.requestUpdate();
+  }
+
+  override wasShown(): void {
+    super.wasShown();
+    CrUXManager.CrUXManager.instance().getConfigSetting().addChangeListener(this.requestUpdate, this);
+    this.requestUpdate();
+  }
+
+  override willHide(): void {
+    super.willHide();
+    CrUXManager.CrUXManager.instance().getConfigSetting().removeChangeListener(this.requestUpdate, this);
+  }
+
+  override performUpdate(): void {
+    const fieldValue = typeof this.#fieldValue === 'string' ? Number(this.#fieldValue) : this.#fieldValue;
+    this.#view({
+      metric: this.#metric,
+      localValue: this.#localValue,
+      fieldValue: fieldValue !== undefined && Number.isFinite(fieldValue) ? fieldValue : undefined,
+      histogram: this.#histogram,
+      subparts: this.#subparts,
+      warnings: this.#warnings,
+    },
+               {}, this.contentElement);
   }
 }

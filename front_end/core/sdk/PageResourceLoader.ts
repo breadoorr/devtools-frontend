@@ -317,6 +317,29 @@ export class PageResourceLoader extends Common.ObjectWrapper.ObjectWrapper<Event
     }
   }
 
+  #resolveFrameTarget(initiator: PageResourceLoadInitiator): {
+    frameTarget: Target|null,
+    frameId: Protocol.Page.FrameId|null,
+  } {
+    let frameTarget: Target|null = initiator.target;
+    let parentFrameId: Protocol.Page.FrameId|null = null;
+    while (frameTarget && !frameTarget.model(ResourceTreeModel)) {
+      parentFrameId = parentFrameId ?? frameTarget.targetInfo()?.parentFrameId ?? null;
+      frameTarget = frameTarget.parentTarget();
+    }
+    const frameId = initiator.frameId ?? parentFrameId ?? frameTarget?.model(ResourceTreeModel)?.mainFrame?.id ?? null;
+    return {frameTarget, frameId};
+  }
+
+  #isSameOriginWithPrimaryPage(frameTarget: Target|null, frameId: Protocol.Page.FrameId|null): boolean {
+    const primaryFrame = this.#targetManager.primaryPageTarget()?.model(ResourceTreeModel)?.mainFrame;
+    const initiatorFrame = frameId ? frameTarget?.model(ResourceTreeModel)?.frameForId(frameId) : null;
+    if (!primaryFrame || !initiatorFrame) {
+      return false;
+    }
+    return initiatorFrame.securityOrigin().isSameOriginWith(primaryFrame.securityOrigin());
+  }
+
   private async dispatchLoad(
       url: Platform.DevToolsPath.UrlString, initiator: PageResourceLoadInitiator, isBinary: boolean): Promise<{
     success: boolean,
@@ -343,29 +366,27 @@ export class PageResourceLoader extends Common.ObjectWrapper.ObjectWrapper<Event
       // directive is present. A null/error response keeps the guard armed so that a
       // detached-frame or protocol-error path cannot fall through to loadFromHostBindings.
       let mustEnforceCSP = isHttp;
-      if (isHttp && initiator.target) {
-        const networkManager = initiator.target.model(NetworkManager);
+      const {frameTarget, frameId} = this.#resolveFrameTarget(initiator);
+      if (isHttp && frameTarget) {
+        const networkManager = frameTarget.model(NetworkManager);
         if (networkManager) {
-          let status = await networkManager.getSecurityIsolationStatus(initiator.frameId);
-          if (!status && initiator.frameId) {
-            status = await networkManager.getSecurityIsolationStatus(null);
-          }
-          if (status) {
-            const csps = status.csp ?? [];
-            mustEnforceCSP = csps.some(csp => csp.effectiveDirectives.includes('connect-src') ||
-                                           csp.effectiveDirectives.includes('default-src'));
+          const status = await networkManager.getSecurityIsolationStatus(frameId);
+          if (status?.csp) {
+            mustEnforceCSP = status.csp.some(csp => csp.effectiveDirectives.includes('connect-src') ||
+                                                 csp.effectiveDirectives.includes('default-src'));
           }
         }
       }
 
       try {
         Host.userMetrics.developerResourceLoaded(Host.UserMetrics.DeveloperResourceLoaded.LOAD_THROUGH_PAGE_VIA_TARGET);
-        const result = await this.loadFromTarget(initiator.target, initiator.frameId, url, isBinary);
+        const result = await this.loadFromTarget(frameTarget ?? initiator.target, frameId, url, isBinary);
         return result;
       } catch (e) {
         if (e instanceof Error) {
           Host.userMetrics.developerResourceLoaded(Host.UserMetrics.DeveloperResourceLoaded.LOAD_THROUGH_PAGE_FAILURE);
-          if (mustEnforceCSP || e.message.includes('CSP violation')) {
+          if (mustEnforceCSP || !this.#isSameOriginWithPrimaryPage(frameTarget, frameId) ||
+              e.message.includes('CSP violation')) {
             return {
               success: false,
               content: '',

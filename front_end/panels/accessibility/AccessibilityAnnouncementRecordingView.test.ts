@@ -5,10 +5,12 @@
 import {assert} from 'chai';
 import sinon from 'sinon';
 
+import * as Common from '../../core/common/common.js';
+import type * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as Protocol from '../../generated/protocol.js';
 import {assertScreenshot, renderElementIntoDOM} from '../../testing/DOMHelpers.js';
-import {createTarget, describeWithEnvironment, stubNoopSettings} from '../../testing/EnvironmentHelpers.js';
+import {createTarget, describeWithEnvironment} from '../../testing/EnvironmentHelpers.js';
 import {MockCDPConnection} from '../../testing/MockCDPConnection.js';
 import {createViewFunctionStub} from '../../testing/ViewFunctionHelpers.js';
 import * as UI from '../../ui/legacy/legacy.js';
@@ -33,7 +35,6 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
   let view: Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView|undefined;
 
   beforeEach(() => {
-    stubNoopSettings();
     const connection = new MockCDPConnection();
     connection.setSuccessHandler('Page.addScriptToEvaluateOnNewDocument',
                                  () => ({
@@ -45,6 +46,7 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     connection.setSuccessHandler('Runtime.evaluate', () => ({
                                                        result: {type: 'undefined'} as Protocol.Runtime.RemoteObject,
                                                      }));
+    connection.setSuccessHandler('Runtime.releaseObjectGroup', () => ({}));
     target = createTarget({connection});
     SDK.TargetManager.TargetManager.instance().setScopeTarget(target);
   });
@@ -560,7 +562,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     it('initializes with default toolbar state and propagates to view input', async () => {
       const viewStub = createViewFunctionStub(
           Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
       renderElementIntoDOM(view);
 
       const input = await viewStub.nextInput;
@@ -574,7 +577,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     it('toggles recording on and off via onToggleRecording', async () => {
       const viewStub = createViewFunctionStub(
           Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
       renderElementIntoDOM(view);
 
       let input = await viewStub.nextInput;
@@ -594,7 +598,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     it('clears announcements list on onClear', async () => {
       const viewStub = createViewFunctionStub(
           Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
       renderElementIntoDOM(view);
 
       let input = await viewStub.nextInput;
@@ -620,7 +625,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     it('filters announcements by record type (Record both, Aria-Live Only, Announcements Only)', async () => {
       const viewStub = createViewFunctionStub(
           Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
       renderElementIntoDOM(view);
 
       let input = await viewStub.nextInput;
@@ -672,7 +678,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     it('strictly isolates regex text filter to message and ignores element HTML', async () => {
       const viewStub = createViewFunctionStub(
           Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
       renderElementIntoDOM(view);
 
       let input = await viewStub.nextInput;
@@ -725,7 +732,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     it('safely handles invalid regex syntax without throwing and produces zero matches', async () => {
       const viewStub = createViewFunctionStub(
           Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
       renderElementIntoDOM(view);
 
       let input = await viewStub.nextInput;
@@ -759,7 +767,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
     it('shows blocked banner articulating target name and failure reason and updates on target removal', async () => {
       const viewStub = createViewFunctionStub(
           Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
       renderElementIntoDOM(view);
 
       let input = await viewStub.nextInput;
@@ -985,7 +994,7 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
            const viewStub = createViewFunctionStub(
                Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
            view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(
-               viewStub);
+               undefined, viewStub);
            renderElementIntoDOM(view);
 
            let input = await viewStub.nextInput;
@@ -1013,8 +1022,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
       it('exports only announcements matching active UI filters and updates canExport accordingly', async () => {
         const viewStub = createViewFunctionStub(
             Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-        view =
-            new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+        view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(
+            undefined, viewStub);
         renderElementIntoDOM(view);
 
         await view.startRecording();
@@ -1059,8 +1068,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
       it('triggers download with UTF-8 BOM, timestamped filename, and revokes object URL on export', async () => {
         const viewStub = createViewFunctionStub(
             Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
-        view =
-            new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(viewStub);
+        view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(
+            undefined, viewStub);
         renderElementIntoDOM(view);
 
         await view.startRecording();
@@ -1134,6 +1143,10 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
             onTextFilterChange: () => {},
             blockedTargets: [],
             announcements: [],
+            selectedAnnouncement: null,
+            onSelectAnnouncement: () => {},
+            onRevealInElements: () => {},
+            onRevealInA11yTree: () => {},
           },
           undefined,
           targetEl,
@@ -1174,6 +1187,10 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
             onTextFilterChange: () => {},
             blockedTargets: [],
             announcements: [mockAnnouncement1, mockAnnouncement2],
+            selectedAnnouncement: null,
+            onSelectAnnouncement: () => {},
+            onRevealInElements: () => {},
+            onRevealInA11yTree: () => {},
           },
           undefined,
           targetEl,
@@ -1210,6 +1227,10 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
               reason: 'Prototype property ariaNotify is non-configurable',
             }],
             announcements: [mockAnnouncement],
+            selectedAnnouncement: null,
+            onSelectAnnouncement: () => {},
+            onRevealInElements: () => {},
+            onRevealInA11yTree: () => {},
           },
           undefined,
           targetEl,
@@ -1330,6 +1351,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
       const cloneRecord = await waitForAnnouncement(r => r.message === 'Clone updated');
 
       assert.notStrictEqual(cloneRecord.elementId, originalId);
+      assert.strictEqual(window.__announcementsRecorderGetElement?.(originalId as string), liveRegion);
+      assert.strictEqual(window.__announcementsRecorderGetElement?.(cloneRecord.elementId as string), cloned);
 
       container.remove();
     });
@@ -1354,6 +1377,8 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
       assert.lengthOf(recorded, 1);
       assert.strictEqual(announcement.message, 'Notification in shadow DOM');
       assert.strictEqual(announcement.politeness, 'polite');
+      assert.strictEqual(window.__announcementsRecorderGetElement?.(announcement.elementId as string),
+                         shadowLiveRegion);
 
       host.remove();
     });
@@ -1421,6 +1446,7 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
 
       assert.notStrictEqual(mockElement.prototype.ariaNotify, originalElementAriaNotify);
       assert.isTrue(Boolean(mockWindow.__announcementsRecorderBinding_loaded));
+      assert.isFunction(mockWindow.__announcementsRecorderGetElement);
 
       // Run teardown
       const runTeardown = new Function('window', TEARDOWN_SCRIPT_SOURCE);
@@ -1431,6 +1457,7 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
       assert.strictEqual(mockDocument.prototype.ariaNotify, originalDocumentAriaNotify);
       assert.isUndefined(mockWindow.__announcementsRecorderBinding_loaded);
       assert.isUndefined(mockWindow.__announcementsRecorderBinding_cleanup);
+      assert.isUndefined(mockWindow.__announcementsRecorderGetElement);
     });
 
     it('exports INJECTED_SCRIPT_SOURCE and TEARDOWN_SCRIPT_SOURCE as valid IIFE strings', () => {
@@ -1486,6 +1513,219 @@ describeWithEnvironment('AccessibilityAnnouncementRecordingView', () => {
       assert.strictEqual(announcement.politeness, 'polite');
 
       root.remove();
+    });
+  });
+
+  describe('DOM Element Revealing and Selection', () => {
+    const mockAnnouncementWithElement: Accessibility.AccessibilityAnnouncementRecordingView.A11yAnnouncement = {
+      api: AnnouncementApi.ARIA_LIVE,
+      message: 'Status notification',
+      politeness: 'polite',
+      element: '<div aria-live="polite">Status notification</div>',
+      elementId: 'rec-42',
+      time: 123456789,
+    };
+
+    it('retrieves element via window.__announcementsRecorderGetElement and reveals DOMNode', async () => {
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView();
+      renderElementIntoDOM(view);
+
+      const runtimeAgent = target.runtimeAgent();
+      const evaluateStub = sinon.stub(runtimeAgent, 'invoke_evaluate').resolves({
+        result: {
+          type: 'object',
+          subtype: 'node',
+          objectId: 'mock-object-id' as Protocol.Runtime.RemoteObjectId,
+        },
+      } as unknown as Protocol.Runtime.EvaluateResponse);
+
+      const domModel = target.model(SDK.DOMModel.DOMModel);
+      assert.exists(domModel);
+      const fakeDomNode = sinon.createStubInstance(SDK.DOMModel.DOMNode);
+      const pushStub = sinon.stub(domModel, 'pushObjectAsNodeToFrontend').resolves(fakeDomNode);
+      const revealStub = sinon.stub(Common.Revealer.RevealerRegistry.instance(), 'reveal').resolves();
+
+      await view.revealElementForTest(mockAnnouncementWithElement, 'elements');
+
+      sinon.assert.calledOnce(evaluateStub);
+      const evaluateArgs = evaluateStub.firstCall.args[0];
+      assert.include(evaluateArgs.expression, 'window.__announcementsRecorderGetElement?.("rec-42")');
+      assert.strictEqual(evaluateArgs.objectGroup, 'reveal-node');
+
+      sinon.assert.calledOnce(pushStub);
+      sinon.assert.calledOnceWithExactly(revealStub, fakeDomNode, false);
+    });
+
+    it('releases objectGroup reveal-node in finally block on successful reveal', async () => {
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView();
+      renderElementIntoDOM(view);
+
+      const runtimeModel = target.model(SDK.RuntimeModel.RuntimeModel);
+      assert.exists(runtimeModel);
+      const releaseSpy = sinon.spy(runtimeModel, 'releaseObjectGroup');
+
+      const runtimeAgent = target.runtimeAgent();
+      sinon.stub(runtimeAgent, 'invoke_evaluate').resolves({
+        result: {
+          type: 'object',
+          subtype: 'node',
+          objectId: 'mock-object-id' as Protocol.Runtime.RemoteObjectId,
+        },
+      } as unknown as Protocol.Runtime.EvaluateResponse);
+
+      const domModel = target.model(SDK.DOMModel.DOMModel);
+      assert.exists(domModel);
+      sinon.stub(domModel, 'pushObjectAsNodeToFrontend').resolves(sinon.createStubInstance(SDK.DOMModel.DOMNode));
+      sinon.stub(Common.Revealer.RevealerRegistry.instance(), 'reveal').resolves();
+
+      await view.revealElementForTest(mockAnnouncementWithElement, 'elements');
+
+      sinon.assert.calledOnceWithExactly(releaseSpy, 'reveal-node');
+    });
+
+    it('releases objectGroup reveal-node in finally block even when evaluation or reveal fails', async () => {
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView();
+      renderElementIntoDOM(view);
+
+      const runtimeModel = target.model(SDK.RuntimeModel.RuntimeModel);
+      assert.exists(runtimeModel);
+      const releaseSpy = sinon.spy(runtimeModel, 'releaseObjectGroup');
+
+      const runtimeAgent = target.runtimeAgent();
+      sinon.stub(runtimeAgent, 'invoke_evaluate').resolves({
+        result: {
+          type: 'object',
+          subtype: 'node',
+          objectId: 'mock-object-id' as Protocol.Runtime.RemoteObjectId,
+        },
+      } as unknown as Protocol.Runtime.EvaluateResponse);
+
+      const domModel = target.model(SDK.DOMModel.DOMModel);
+      assert.exists(domModel);
+      sinon.stub(domModel, 'pushObjectAsNodeToFrontend').rejects(new Error('CDP failure'));
+
+      try {
+        await view.revealElementForTest(mockAnnouncementWithElement, 'elements');
+      } catch {
+      }
+
+      sinon.assert.calledOnceWithExactly(releaseSpy, 'reveal-node');
+    });
+
+    it('toggles accessibility tree action when targetPanel is accessibility vs elements', async () => {
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView();
+      renderElementIntoDOM(view);
+
+      UI.ActionRegistration.maybeRemoveActionExtension('elements.toggle-a11y-tree');
+      let toggled = false;
+      UI.ActionRegistration.registerActionExtension({
+        actionId: 'elements.toggle-a11y-tree',
+        category: UI.ActionRegistration.ActionCategory.ELEMENTS,
+        title: () => 'Toggle a11y tree' as Platform.UIString.LocalizedString,
+        toggleable: true,
+        loadActionDelegate: async () => ({
+          handleAction: () => {
+            toggled = !toggled;
+            toggleAction.setToggled(toggled);
+            return true;
+          },
+        }),
+      });
+      const toggleAction = UI.ActionRegistry.ActionRegistry.instance().getAction('elements.toggle-a11y-tree');
+
+      const runtimeAgent = target.runtimeAgent();
+      sinon.stub(runtimeAgent, 'invoke_evaluate').resolves({
+        result: {
+          type: 'object',
+          subtype: 'node',
+          objectId: 'mock-object-id' as Protocol.Runtime.RemoteObjectId,
+        },
+      } as unknown as Protocol.Runtime.EvaluateResponse);
+
+      const domModel = target.model(SDK.DOMModel.DOMModel);
+      assert.exists(domModel);
+      sinon.stub(domModel, 'pushObjectAsNodeToFrontend').resolves(sinon.createStubInstance(SDK.DOMModel.DOMNode));
+      sinon.stub(Common.Revealer.RevealerRegistry.instance(), 'reveal').resolves();
+
+      // 1. Reveal in accessibility tree when tree is not toggled -> should execute toggle action
+      assert.isFalse(toggleAction.toggled());
+      await view.revealElementForTest(mockAnnouncementWithElement, 'accessibility');
+      assert.isTrue(toggleAction.toggled());
+
+      // 2. Reveal in elements panel when tree is toggled -> should execute toggle action to switch back
+      await view.revealElementForTest(mockAnnouncementWithElement, 'elements');
+      assert.isFalse(toggleAction.toggled());
+
+      UI.ActionRegistration.maybeRemoveActionExtension('elements.toggle-a11y-tree');
+    });
+
+    it('gracefully exits without evaluating when elementId is missing or falsy', async () => {
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView();
+      renderElementIntoDOM(view);
+
+      const runtimeAgent = target.runtimeAgent();
+      const evaluateSpy = sinon.spy(runtimeAgent, 'invoke_evaluate');
+
+      const announcementWithoutId: Accessibility.AccessibilityAnnouncementRecordingView.A11yAnnouncement = {
+        api: AnnouncementApi.ARIA_LIVE,
+        message: 'No element id',
+        politeness: 'polite',
+        element: '<div>No element id</div>',
+        time: 123456789,
+      };
+
+      await view.revealElementForTest(announcementWithoutId, 'elements');
+
+      sinon.assert.notCalled(evaluateSpy);
+    });
+
+    it('gracefully handles query returning null when element was removed from page', async () => {
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView();
+      renderElementIntoDOM(view);
+
+      const runtimeModel = target.model(SDK.RuntimeModel.RuntimeModel);
+      assert.exists(runtimeModel);
+      const releaseSpy = sinon.spy(runtimeModel, 'releaseObjectGroup');
+
+      const runtimeAgent = target.runtimeAgent();
+      sinon.stub(runtimeAgent, 'invoke_evaluate').resolves({
+        result: {
+          type: 'object',
+          subtype: 'null',
+          value: null,
+        },
+      } as unknown as Protocol.Runtime.EvaluateResponse);
+
+      const revealStub = sinon.stub(Common.Revealer.RevealerRegistry.instance(), 'reveal').resolves();
+
+      await view.revealElementForTest(mockAnnouncementWithElement, 'elements');
+
+      sinon.assert.notCalled(revealStub);
+      sinon.assert.calledOnceWithExactly(releaseSpy, 'reveal-node');
+    });
+
+    it('exposes row selection to parent view and wires callbacks through ViewInput', async () => {
+      const viewStub = createViewFunctionStub(
+          Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView);
+      view = new Accessibility.AccessibilityAnnouncementRecordingView.AccessibilityAnnouncementRecordingView(undefined,
+                                                                                                             viewStub);
+      renderElementIntoDOM(view);
+
+      const input = await viewStub.nextInput;
+      assert.isNull(input.selectedAnnouncement);
+      assert.isFunction(input.onSelectAnnouncement);
+      assert.isFunction(input.onRevealInElements);
+      assert.isFunction(input.onRevealInA11yTree);
+
+      input.onSelectAnnouncement(mockAnnouncementWithElement);
+      const updatedInput = await viewStub.nextInput;
+      assert.strictEqual(updatedInput.selectedAnnouncement, mockAnnouncementWithElement);
+      assert.strictEqual(view.selectedAnnouncementForTest(), mockAnnouncementWithElement);
+
+      input.onSelectAnnouncement(null);
+      const deselectedInput = await viewStub.nextInput;
+      assert.isNull(deselectedInput.selectedAnnouncement);
+      assert.isNull(view.selectedAnnouncementForTest());
     });
   });
 });

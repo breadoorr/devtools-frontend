@@ -56,7 +56,7 @@ import {CallStackSidebarPane} from './CallStackSidebarPane.js';
 import {DebuggerPausedMessage} from './DebuggerPausedMessage.js';
 import {NavigatorView} from './NavigatorView.js';
 import sourcesPanelStyles from './sourcesPanel.css.js';
-import {Events, SourcesView} from './SourcesView.js';
+import {type EditorClosedEvent, Events, SourcesView} from './SourcesView.js';
 import {ThreadsSidebarPane} from './ThreadsSidebarPane.js';
 import {UISourceCodeFrame} from './UISourceCodeFrame.js';
 
@@ -152,6 +152,22 @@ const UIStrings = {
    * @description Context menu item in Sources panel to explain input handling in a script via AI.
    */
   explainInputHandling: 'Explain input handling',
+  /**
+   * @description Screen reader announcement when the navigator sidebar is shown in the Sources panel.
+   */
+  navigatorShown: 'Navigator sidebar shown',
+  /**
+   * @description Screen reader announcement when the navigator sidebar is hidden in the Sources panel.
+   */
+  navigatorHidden: 'Navigator sidebar hidden',
+  /**
+   * @description Screen reader announcement when the debugger sidebar is shown in the Sources panel.
+   */
+  debuggerShown: 'Debugger sidebar shown',
+  /**
+   * @description Screen reader announcement when the debugger sidebar is hidden in the Sources panel.
+   */
+  debuggerHidden: 'Debugger sidebar hidden',
 } as const;
 const str_ = i18n.i18n.registerUIStrings('panels/sources/SourcesPanel.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
@@ -262,6 +278,7 @@ export class SourcesPanel extends UI.Panel.Panel implements
 
     this.#sourcesView = new SourcesView();
     this.#sourcesView.addEventListener(Events.EDITOR_SELECTED, this.editorSelected.bind(this));
+    this.#sourcesView.addEventListener(Events.EDITOR_CLOSED, this.editorClosed.bind(this));
 
     this.#sourcesView.onToggleNavigatorSidebar = this.toggleNavigatorSidebar.bind(this);
     this.#sourcesView.onToggleDebuggerSidebar = this.toggleDebuggerSidebar.bind(this);
@@ -421,17 +438,21 @@ export class SourcesPanel extends UI.Panel.Panel implements
     }  // Do not force layout.
   }
 
-  override searchableView(): UI.SearchableView.SearchableView {
+  override searchableView(): UI.SearchableView.SearchableView|null {
     return this.#sourcesView.searchableView();
   }
 
   toggleNavigatorSidebar(): void {
-    this.editorView.toggleSidebar();
+    const isOpen = this.editorView.toggleSidebar();
+    UI.ARIAUtils.LiveAnnouncer.alert(isOpen ? i18nString(UIStrings.navigatorShown) :
+                                              i18nString(UIStrings.navigatorHidden));
   }
 
   toggleDebuggerSidebar(): void {
-    this.splitWidget.toggleSidebar();
-    this.sidebarPaneStack?.notifyVisibilityChanged(this.splitWidget.sidebarIsShowing());
+    const isOpen = this.splitWidget.toggleSidebar();
+    UI.ARIAUtils.LiveAnnouncer.alert(isOpen ? i18nString(UIStrings.debuggerShown) :
+                                              i18nString(UIStrings.debuggerHidden));
+    this.sidebarPaneStack?.notifyVisibilityChanged(isOpen);
   }
 
   private debuggerPaused(event: Common.EventTarget.EventTargetEvent<SDK.DebuggerModel.DebuggerModel>): void {
@@ -592,9 +613,8 @@ export class SourcesPanel extends UI.Panel.Panel implements
     }
   }
 
-  private addSettingMenuItem(
-      contextMenu: UI.ContextMenu.Section, settingName: string, menuText: Common.UIString.LocalizedString): void {
-    const setting = Common.Settings.Settings.instance().moduleSetting(settingName);
+  private addSettingMenuItem(contextMenu: UI.ContextMenu.Section, setting: Common.Settings.Setting<boolean>,
+                             menuText: Common.UIString.LocalizedString): void {
     contextMenu.appendCheckboxItem(
         menuText, () => setting.set(!setting.get()), {checked: setting.get(), jslogContext: setting.name});
   }
@@ -602,11 +622,17 @@ export class SourcesPanel extends UI.Panel.Panel implements
   private populateNavigatorMenu(contextMenu: UI.ContextMenu.ContextMenu): void {
     contextMenu.appendItemsAtLocation('navigatorMenu');
     this.addSettingMenuItem(
-        contextMenu.viewSection(), 'navigator-group-by-folder', i18nString(UIStrings.groupByFolder));
+        contextMenu.viewSection(),
+        Common.Settings.Settings.instance().resolve(Settings.SourcesSettings.navigatorGroupByFolderSettingDescriptor),
+        i18nString(UIStrings.groupByFolder));
     this.addSettingMenuItem(
-        contextMenu.viewSection(), 'navigator-group-by-authored', i18nString(UIStrings.groupByAuthored));
+        contextMenu.viewSection(),
+        Common.Settings.Settings.instance().resolve(Settings.SourcesSettings.navigatorGroupByAuthoredSettingDescriptor),
+        i18nString(UIStrings.groupByAuthored));
     this.addSettingMenuItem(
-        contextMenu.viewSection(), 'navigator-just-my-code', i18nString(UIStrings.hideIgnoreListed));
+        contextMenu.viewSection(),
+        Common.Settings.Settings.instance().resolve(Settings.SourcesSettings.navigatorJustMyCodeSettingDescriptor),
+        i18nString(UIStrings.hideIgnoreListed));
   }
 
   updateLastModificationTime(): void {
@@ -701,8 +727,17 @@ export class SourcesPanel extends UI.Panel.Panel implements
     const uiSourceCode = event.data;
     UI.Context.Context.instance().setFlavor(Workspace.UISourceCode.UISourceCode, uiSourceCode);
     if (this.editorView.mainWidget() &&
-        Common.Settings.Settings.instance().moduleSetting('auto-reveal-in-navigator').get()) {
+        Common.Settings.Settings.instance()
+            .resolve(Settings.SourcesSettings.autoRevealInNavigatorSettingDescriptor)
+            .get()) {
       void this.revealInNavigator(uiSourceCode, true);
+    }
+  }
+
+  private editorClosed({data: {uiSourceCode}}: Common.EventTarget.EventTargetEvent<EditorClosedEvent>): void {
+    const context = UI.Context.Context.instance();
+    if (context.flavor(Workspace.UISourceCode.UISourceCode) === uiSourceCode) {
+      context.setFlavor(Workspace.UISourceCode.UISourceCode, null);
     }
   }
 
@@ -888,7 +923,9 @@ export class SourcesPanel extends UI.Panel.Panel implements
     const eventTarget = (event.target as Node);
     if (!uiSourceCode.project().isServiceProject() &&
         !eventTarget.isSelfOrDescendant(this.navigatorTabbedLocation.widget().element) &&
-        !(Common.Settings.Settings.instance().moduleSetting('navigator-just-my-code').get() &&
+        !(Common.Settings.Settings.instance()
+              .resolve(Settings.SourcesSettings.navigatorJustMyCodeSettingDescriptor)
+              .get() &&
           Workspace.IgnoreListManager.IgnoreListManager.instance().isUserOrSourceMapIgnoreListedUISourceCode(
               uiSourceCode))) {
       contextMenu.revealSection().appendItem(
@@ -1396,7 +1433,8 @@ export class ActionDelegate implements UI.ActionRegistration.ActionDelegate {
         return true;
       }
       case 'sources.toggle-word-wrap': {
-        const setting = Common.Settings.Settings.instance().moduleSetting<boolean>('sources.word-wrap');
+        const setting =
+            Common.Settings.Settings.instance().resolve(Settings.SourcesSettings.sourcesWordWrapSettingDescriptor);
         setting.set(!setting.get());
         return true;
       }

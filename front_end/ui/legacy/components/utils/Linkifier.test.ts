@@ -120,7 +120,22 @@ describeWithEnvironment('Linkifier', () => {
       const url = urlString`chrome://settings`;
       const link = Components.Linkifier.Linkifier.linkifyURL(url, {allowPrivileged: true});
       assert.isTrue(link.classList.contains('devtools-link'));
+      const info = Components.Linkifier.Linkifier.linkInfo(link);
+      assert.exists(info);
+      const actions = Components.Linkifier.Linkifier.linkActions(info);
+      assert.isTrue(actions.some(a => a.jslogContext === 'open-in-new-tab'));
     });
+
+    it('omits open-in-new-tab and does not trigger clipboard copy on invokeFirstAction for privileged URLs without allowPrivileged',
+       () => {
+         const info = {
+           url: urlString`chrome://settings`,
+         };
+         const actions = Components.Linkifier.Linkifier.linkActions(info);
+         assert.isFalse(actions.some(a => a.jslogContext === 'open-in-new-tab'));
+         assert.isTrue(actions.some(a => a.jslogContext === 'copy-link-address'));
+         assert.isFalse(Components.Linkifier.Linkifier.invokeFirstAction(info));
+       });
 
     it('renders file URLs as plain span by default', async () => {
       const url = urlString`file:///etc/passwd`;
@@ -163,7 +178,7 @@ describeWithEnvironment('Linkifier', () => {
 
     const info = Components.Linkifier.Linkifier.linkInfo(anchor);
     assert.exists(info);
-    assert.isNull(info.uiLocation);
+    assert.isUndefined(info.uiLocation);
   });
 
   it('resolves url and updates link as soon as debugger is enabled', done => {
@@ -243,7 +258,7 @@ describeWithEnvironment('Linkifier', () => {
     // the same url).
     const info = Components.Linkifier.Linkifier.linkInfo(anchor);
     assert.exists(info);
-    assert.isNull(info.uiLocation);
+    assert.isUndefined(info.uiLocation);
 
     const scriptParsedEvent2: Protocol.Debugger.ScriptParsedEvent = {
       scriptId: scriptId2,
@@ -511,17 +526,7 @@ describeWithEnvironment('Linkifier', () => {
 
     it('returns no actions when no link handlers are registered', () => {
       const url = urlString`foo-extension://node/1`;
-      const actions = Components.Linkifier.Linkifier.linkActions({
-        url,
-        icon: null,
-        enableDecorator: false,
-        uiLocation: null,
-        liveLocation: null,
-        lineNumber: null,
-        columnNumber: null,
-        revealable: null,
-        fallback: null,
-      });
+      const actions = Components.Linkifier.Linkifier.linkActions({url});
       const openUsingActions = actions.filter(action => action.title.startsWith('Open using'));
       assert.isEmpty(openUsingActions);
     });
@@ -539,17 +544,7 @@ describeWithEnvironment('Linkifier', () => {
       });
 
       const url = urlString`foo-extension://node/1`;
-      const actions = Components.Linkifier.Linkifier.linkActions({
-        url,
-        icon: null,
-        enableDecorator: false,
-        uiLocation: null,
-        liveLocation: null,
-        lineNumber: null,
-        columnNumber: null,
-        revealable: null,
-        fallback: null,
-      });
+      const actions = Components.Linkifier.Linkifier.linkActions({url});
       const openUsingAction = actions.find(action => action.title === 'Open using Handler for foo-extension');
       assert.exists(openUsingAction);
       await openUsingAction?.handler();
@@ -581,17 +576,7 @@ describeWithEnvironment('Linkifier', () => {
         // Ensure that the foo-extension is the main handler for foo-extension links, and that the
         // global handler doesn't take precedent.
         const url = urlString`foo-extension://node/1`;
-        const actions = Components.Linkifier.Linkifier.linkActions({
-          url,
-          icon: null,
-          enableDecorator: false,
-          uiLocation: null,
-          liveLocation: null,
-          lineNumber: null,
-          columnNumber: null,
-          revealable: null,
-          fallback: null,
-        });
+        const actions = Components.Linkifier.Linkifier.linkActions({url});
         assert.lengthOf(actions, 3);  // Two fallback actions are always added.
 
         const openUsingAction = actions.find(action => action.title === 'Open using Handler for foo-extension');
@@ -601,17 +586,7 @@ describeWithEnvironment('Linkifier', () => {
       {
         // Ensure that the Global handler handles its own links.
         const url = urlString`global://node/1`;
-        const actions = Components.Linkifier.Linkifier.linkActions({
-          url,
-          icon: null,
-          enableDecorator: false,
-          uiLocation: null,
-          liveLocation: null,
-          lineNumber: null,
-          columnNumber: null,
-          revealable: null,
-          fallback: null,
-        });
+        const actions = Components.Linkifier.Linkifier.linkActions({url});
         assert.lengthOf(actions, 3);  // One for our handler + 'Open in New Tab' and 'Copy link'.
 
         const openUsingAction = actions.find(action => action.title === 'Open using Global Handler');
@@ -621,17 +596,7 @@ describeWithEnvironment('Linkifier', () => {
       {
         // Ensure that the Global handler handles all other links.
         const url = urlString`http://www.example.com`;
-        const actions = Components.Linkifier.Linkifier.linkActions({
-          url,
-          icon: null,
-          enableDecorator: false,
-          uiLocation: null,
-          liveLocation: null,
-          lineNumber: null,
-          columnNumber: null,
-          revealable: null,
-          fallback: null,
-        });
+        const actions = Components.Linkifier.Linkifier.linkActions({url});
         assert.lengthOf(actions, 3);  // One for our handler + 'Open in New Tab' and 'Copy link'.
 
         const openUsingAction = actions.find(action => action.title === 'Open using Global Handler');
@@ -642,24 +607,28 @@ describeWithEnvironment('Linkifier', () => {
 });
 
 describeWithEnvironment('ContentProviderContextMenuProvider', () => {
-  it('does not add \'Open in new tab\'-entry for file URLs', async () => {
+  it('does not add \'Open in new tab\'-entry for privileged URLs', async () => {
     const provider = new Components.Linkifier.ContentProviderContextMenuProvider();
 
-    let contextMenu = new UI.ContextMenu.ContextMenu({} as Event);
-    let uiSourceCode = {
+    const contextMenu = new UI.ContextMenu.ContextMenu({} as Event);
+    const uiSourceCode = {
       contentURL: () => 'https://www.example.com/index.html',
     } as Workspace.UISourceCode.UISourceCode;
     provider.appendApplicableItems({} as Event, contextMenu, uiSourceCode);
-    let openInNewTabItem = findMenuItemWithLabel(contextMenu.revealSection(), 'Open in new tab');
+    const openInNewTabItem = findMenuItemWithLabel(contextMenu.revealSection(), 'Open in new tab');
     assert.exists(openInNewTabItem);
 
-    contextMenu = new UI.ContextMenu.ContextMenu({} as Event);
-    uiSourceCode = {
-      contentURL: () => 'file://usr/local/example/index.html',
-    } as Workspace.UISourceCode.UISourceCode;
-    provider.appendApplicableItems({} as Event, contextMenu, uiSourceCode);
-    openInNewTabItem = findMenuItemWithLabel(contextMenu.revealSection(), 'Open in new tab');
-    assert.isUndefined(openInNewTabItem);
+    for (const url of ['file://usr/local/example/index.html',
+                       'chrome-extension://nnkmpipfcdgmkgepigmhifcgbddoohgk/secret.html',
+                       'chrome://settings',
+    ]) {
+      const menu = new UI.ContextMenu.ContextMenu({} as Event);
+      const sourceCode = {
+        contentURL: () => url,
+      } as Workspace.UISourceCode.UISourceCode;
+      provider.appendApplicableItems({} as Event, menu, sourceCode);
+      assert.isUndefined(findMenuItemWithLabel(menu.revealSection(), 'Open in new tab'));
+    }
   });
 });
 

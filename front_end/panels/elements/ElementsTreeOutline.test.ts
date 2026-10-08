@@ -1382,4 +1382,621 @@ describeWithEnvironment('ElementsTreeOutline', () => {
       assert.strictEqual(moveToStub.firstCall.args[1], childNode2);
     });
   });
+
+  function makeNodePayload(nodeId: number, nodeName: string, opts: Partial<Protocol.DOM.Node> = {}): Protocol.DOM.Node {
+    return {
+      nodeId: nodeId as Protocol.DOM.NodeId,
+      backendNodeId: nodeId as Protocol.DOM.BackendNodeId,
+      nodeType: opts.nodeType ?? Node.ELEMENT_NODE,
+      nodeName,
+      localName: opts.localName ?? nodeName.toLowerCase(),
+      nodeValue: opts.nodeValue ?? '',
+      childNodeCount: opts.children?.length ?? opts.childNodeCount ?? 0,
+      children: opts.children ?? [],
+      attributes: opts.attributes ?? [],
+      ...opts,
+    };
+  }
+
+  it('removes doctype and document element from #document via ChildNodeRemoved without crashing', () => {
+    const doctypePayload = makeNodePayload(
+        2, 'html', {parentId: 1 as Protocol.DOM.NodeId, nodeType: Node.DOCUMENT_TYPE_NODE, publicId: '', systemId: ''});
+    const htmlPayload = makeNodePayload(3, 'HTML', {parentId: 1 as Protocol.DOM.NodeId});
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false,
+        makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [doctypePayload, htmlPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const doctypeNode = model.nodeForId(2 as Protocol.DOM.NodeId)!;
+    const htmlNode = model.nodeForId(3 as Protocol.DOM.NodeId)!;
+    const doctypeTreeElement = treeOutline.findTreeElement(doctypeNode);
+    assert.isNotNull(doctypeTreeElement);
+    assert.isNotNull(treeOutline.findTreeElement(htmlNode));
+    const topLevelNodes = () => treeOutline.rootElement().children().map(
+        child => child instanceof Elements.ElementsTreeElement.ElementsTreeElement ? child.node() : null);
+    assert.include(topLevelNodes(), doctypeNode);
+
+    model.childNodeRemoved(1 as Protocol.DOM.NodeId, 2 as Protocol.DOM.NodeId);
+    treeOutline.runPendingUpdates();
+    assert.isNull(model.nodeForId(2 as Protocol.DOM.NodeId));
+    // The doctype tree element must be gone from the rendered tree.
+    assert.notInclude(topLevelNodes(), doctypeNode);
+    assert.isNull(doctypeTreeElement.parent);
+    assert.isNull(doctypeTreeElement.treeOutline);
+    assert.isNotNull(treeOutline.findTreeElement(htmlNode));
+
+    model.childNodeRemoved(1 as Protocol.DOM.NodeId, 3 as Protocol.DOM.NodeId);
+    treeOutline.runPendingUpdates();
+    assert.isNull(model.nodeForId(3 as Protocol.DOM.NodeId));
+    assert.isEmpty(rootNode.children() ?? []);
+  });
+
+  it('updates isExpandable on a collapsed element when ChildNodeCountUpdated fires', () => {
+    const childPayload =
+        makeNodePayload(2, 'DIV', {parentId: 1 as Protocol.DOM.NodeId, attributes: ['id', 'collapsed-target']});
+    const rootNode =
+        SDK.DOMModel.DOMNode.create(model, null, false, makeNodePayload(1, 'BODY', {children: [childPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const childNode = model.nodeForId(2 as Protocol.DOM.NodeId)!;
+    const treeElement = treeOutline.findTreeElement(childNode)!;
+    assert.isFalse(treeElement.expanded);
+    assert.isFalse(treeElement.isExpandable());
+
+    model.childNodeCountUpdated(2 as Protocol.DOM.NodeId, 1);
+    treeOutline.runPendingUpdates();
+
+    assert.isTrue(treeElement.isExpandable());
+    assert.isFalse(treeElement.expanded);
+  });
+
+  it('updates tree element title when setting an attribute on a non-HTML SVG element', () => {
+    const rectPayload = makeNodePayload(2, 'rect', {parentId: 1 as Protocol.DOM.NodeId, attributes: ['width', '100']});
+    const rootNode =
+        SDK.DOMModel.DOMNode.create(model, null, false, makeNodePayload(1, 'svg', {children: [rectPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const rectNode = model.nodeForId(2 as Protocol.DOM.NodeId)!;
+    const rectTreeElement = treeOutline.findTreeElement(rectNode)!;
+    model.attributeModified(2 as Protocol.DOM.NodeId, 'viewBox', '0 0 50 50');
+    treeOutline.runPendingUpdates();
+
+    assert.strictEqual(rectNode.getAttribute('viewBox'), '0 0 50 50');
+    assert.include(rectTreeElement.widget.contentElement.textContent, 'viewBox');
+    assert.include(rectTreeElement.widget.contentElement.textContent, '0 0 50 50');
+  });
+
+  it('creates open and closed #shadow-root tree elements when ShadowRootPushed fires', async () => {
+    const rootNode = SDK.DOMModel.DOMNode.create(model, null, false, makeNodePayload(1, 'BODY', {
+                                                   children: [
+                                                     makeNodePayload(2, 'DIV', {parentId: 1 as Protocol.DOM.NodeId}),
+                                                     makeNodePayload(3, 'DIV', {parentId: 1 as Protocol.DOM.NodeId}),
+                                                   ],
+                                                 }));
+    treeOutline.rootDOMNode = rootNode;
+
+    model.shadowRootPushed(2 as Protocol.DOM.NodeId, makeNodePayload(4, '#shadow-root', {
+                             parentId: 2 as Protocol.DOM.NodeId,
+                             nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+                             shadowRootType: Protocol.DOM.ShadowRootType.Open,
+                           }));
+    model.shadowRootPushed(3 as Protocol.DOM.NodeId, makeNodePayload(5, '#shadow-root', {
+                             parentId: 3 as Protocol.DOM.NodeId,
+                             nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+                             shadowRootType: Protocol.DOM.ShadowRootType.Closed,
+                           }));
+    treeOutline.runPendingUpdates();
+
+    const openHostEl = treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!;
+    const closedHostEl = treeOutline.findTreeElement(model.nodeForId(3 as Protocol.DOM.NodeId)!)!;
+    await treeOutline.populateTreeElement(openHostEl);
+    await treeOutline.populateTreeElement(closedHostEl);
+
+    const openShadowEl = openHostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+    const closedShadowEl = closedHostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+    assert.strictEqual(openShadowEl.node().nodeNameInCorrectCase(), '#shadow-root (open)');
+    assert.strictEqual(closedShadowEl.node().nodeNameInCorrectCase(), '#shadow-root (closed)');
+  });
+
+  it('renders shadow host with <slot> and distributed nodes in tree children', async () => {
+    const slotPayload = makeNodePayload(5, 'SLOT', {
+      parentId: 4 as Protocol.DOM.NodeId,
+      distributedNodes:
+          [{nodeType: Node.ELEMENT_NODE, nodeName: 'SPAN', backendNodeId: 3 as Protocol.DOM.BackendNodeId}],
+    });
+    const shadowPayload = makeNodePayload(4, '#shadow-root', {
+      parentId: 2 as Protocol.DOM.NodeId,
+      nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+      shadowRootType: Protocol.DOM.ShadowRootType.Open,
+      children: [slotPayload],
+    });
+    const hostPayload = makeNodePayload(2, 'DIV', {
+      parentId: 1 as Protocol.DOM.NodeId,
+      children: [makeNodePayload(3, 'SPAN', {parentId: 2 as Protocol.DOM.NodeId})],
+      shadowRoots: [shadowPayload],
+    });
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [hostPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const hostEl = treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!;
+    await treeOutline.populateTreeElement(hostEl);
+    const shadowEl = hostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+    await treeOutline.populateTreeElement(shadowEl);
+    const slotEl = shadowEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+    await treeOutline.populateTreeElement(slotEl);
+
+    assert.isTrue(slotEl.isExpandable());
+    assert.lengthOf(slotEl.node().distributedNodes(), 1);
+    assert.isAbove(slotEl.childCount(), 1);
+  });
+
+  it('refreshes slot links when slot attributes and DistributedNodesUpdated fire', async () => {
+    const slotPayload = makeNodePayload(4, 'SLOT', {
+      parentId: 3 as Protocol.DOM.NodeId,
+      attributes: ['name', 's1'],
+      distributedNodes: [],
+    });
+    const shadowPayload = makeNodePayload(3, '#shadow-root', {
+      parentId: 2 as Protocol.DOM.NodeId,
+      nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+      shadowRootType: Protocol.DOM.ShadowRootType.Open,
+      children: [slotPayload],
+    });
+    const hostPayload = makeNodePayload(2, 'DIV', {parentId: 1 as Protocol.DOM.NodeId, shadowRoots: [shadowPayload]});
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [hostPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const hostEl = treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!;
+    await treeOutline.populateTreeElement(hostEl);
+    const shadowEl = hostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+    await treeOutline.populateTreeElement(shadowEl);
+    const slotEl = shadowEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+    await treeOutline.populateTreeElement(slotEl);
+
+    model.attributeModified(4 as Protocol.DOM.NodeId, 'name', 's2');
+    model.distributedNodesUpdated(4 as Protocol.DOM.NodeId, [
+      {nodeType: Node.ELEMENT_NODE, nodeName: 'DIV', backendNodeId: 10 as Protocol.DOM.BackendNodeId},
+      {nodeType: Node.TEXT_NODE, nodeName: '#text', backendNodeId: 11 as Protocol.DOM.BackendNodeId},
+    ]);
+    treeOutline.runPendingUpdates();
+
+    assert.strictEqual(slotEl.node().getAttribute('name'), 's2');
+    assert.lengthOf(slotEl.node().distributedNodes(), 2);
+    assert.strictEqual(slotEl.childCount(), 3);
+  });
+
+  it('removes child tree element inside a shadow root when ChildNodeRemoved fires', async () => {
+    const shadowChild =
+        makeNodePayload(4, 'DIV', {parentId: 3 as Protocol.DOM.NodeId, attributes: ['id', 'shadow-child']});
+    const shadowPayload = makeNodePayload(3, '#shadow-root', {
+      parentId: 2 as Protocol.DOM.NodeId,
+      nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+      shadowRootType: Protocol.DOM.ShadowRootType.Open,
+      children: [shadowChild],
+    });
+    const hostPayload = makeNodePayload(2, 'DIV', {parentId: 1 as Protocol.DOM.NodeId, shadowRoots: [shadowPayload]});
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [hostPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const hostEl = treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!;
+    await treeOutline.populateTreeElement(hostEl);
+    const shadowEl = hostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+    await treeOutline.populateTreeElement(shadowEl);
+    assert.isNotNull(treeOutline.findTreeElement(model.nodeForId(4 as Protocol.DOM.NodeId)!));
+
+    model.childNodeRemoved(3 as Protocol.DOM.NodeId, 4 as Protocol.DOM.NodeId);
+    treeOutline.runPendingUpdates();
+
+    assert.isNull(model.nodeForId(4 as Protocol.DOM.NodeId));
+    assert.strictEqual(shadowEl.childCount(), 0);
+  });
+
+  /**
+   * Describes the children of a tree element in the same spirit as the legacy
+   * `ElementsTestRunner.dumpElementsTree` output.
+   */
+  function describeChildren(treeElement: UI.TreeOutline.TreeElement): string[] {
+    return treeElement.children().map(child => {
+      const shortcutTitle = child.listItemElement.querySelector('.elements-tree-shortcut-title');
+      if (shortcutTitle) {
+        return `${shortcutTitle.textContent?.trim()} ${
+                   child.listItemElement.textContent?.includes('reveal') ? 'reveal' : ''}`
+            .trim();
+      }
+      if (!(child instanceof Elements.ElementsTreeElement.ElementsTreeElement)) {
+        return child.button ? `[${child.title}]` : '<other>';
+      }
+      const node = child.node();
+      if (child.isClosingTag()) {
+        return `</${node.nodeNameInCorrectCase()}>`;
+      }
+      if (node.nodeType() === Node.TEXT_NODE) {
+        return `"${node.nodeValue()}"`;
+      }
+      const attrs = node.attributes().map(attr => ` ${attr.name}="${attr.value}"`).join('');
+      return node.nodeType() === Node.ELEMENT_NODE ? `<${node.nodeNameInCorrectCase()}${attrs}>` :
+                                                     node.nodeNameInCorrectCase();
+    });
+  }
+
+  async function expandTreeElement(treeElement: Elements.ElementsTreeElement.ElementsTreeElement):
+      Promise<Elements.ElementsTreeElement.ElementsTreeElement> {
+    await treeOutline.populateTreeElement(treeElement);
+    treeElement.expand();
+    return treeElement;
+  }
+
+  it('keeps #shadow-root first and appends new light children last, rendering slot fallback content', async () => {
+    // Mirrors legacy shadow/shadow-host-display-modes.
+    const fallbackPayload =
+        makeNodePayload(13, 'DIV', {parentId: 12 as Protocol.DOM.NodeId, attributes: ['id', 'fallbackOldest']});
+    const slotPayload = makeNodePayload(12, 'SLOT', {
+      parentId: 11 as Protocol.DOM.NodeId,
+      attributes: ['name', '.distributeMeToOldest'],
+      distributedNodes: [],
+      children: [fallbackPayload],
+    });
+    const mainPayload = makeNodePayload(11, 'DIV', {
+      parentId: 10 as Protocol.DOM.NodeId,
+      attributes: ['class', 'oldestShadowMain'],
+      children: [slotPayload],
+    });
+    const hostPayload = makeNodePayload(2, 'DIV', {
+      parentId: 1 as Protocol.DOM.NodeId,
+      attributes: ['id', 'shadowHost'],
+      children: [
+        makeNodePayload(3, 'DIV', {parentId: 2 as Protocol.DOM.NodeId, attributes: ['slot', 'distributeMeToYoungest']}),
+        makeNodePayload(4, 'DIV', {parentId: 2 as Protocol.DOM.NodeId, attributes: ['slot', 'distributeMeToOldest']}),
+      ],
+    });
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [hostPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const hostEl = await expandTreeElement(treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!);
+    assert.deepEqual(describeChildren(hostEl), [
+      '<div slot="distributeMeToYoungest">',
+      '<div slot="distributeMeToOldest">',
+      '</div>',
+    ]);
+
+    model.shadowRootPushed(2 as Protocol.DOM.NodeId, makeNodePayload(10, '#shadow-root', {
+                             parentId: 2 as Protocol.DOM.NodeId,
+                             nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+                             shadowRootType: Protocol.DOM.ShadowRootType.Open,
+                             children: [mainPayload],
+                           }));
+    treeOutline.runPendingUpdates();
+
+    assert.deepEqual(describeChildren(hostEl), [
+      '#shadow-root (open)',
+      '<div slot="distributeMeToYoungest">',
+      '<div slot="distributeMeToOldest">',
+      '</div>',
+    ]);
+    const shadowEl = await expandTreeElement(hostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement);
+    const mainEl = await expandTreeElement(shadowEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement);
+    const slotEl = await expandTreeElement(mainEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement);
+    assert.deepEqual(describeChildren(mainEl), ['<slot name=".distributeMeToOldest">', '</div>']);
+    // With no distributed nodes, the slot shows its fallback child and no shortcut links.
+    assert.deepEqual(describeChildren(slotEl), ['<div id="fallbackOldest">', '</slot>']);
+
+    model.childNodeInserted(
+        2 as Protocol.DOM.NodeId, 4 as Protocol.DOM.NodeId,
+        makeNodePayload(5, 'DIV', {parentId: 2 as Protocol.DOM.NodeId, attributes: ['slot', 'distributeMeAsWell_1']}));
+    treeOutline.runPendingUpdates();
+    assert.deepEqual(describeChildren(hostEl), [
+      '#shadow-root (open)',
+      '<div slot="distributeMeToYoungest">',
+      '<div slot="distributeMeToOldest">',
+      '<div slot="distributeMeAsWell_1">',
+      '</div>',
+    ]);
+
+    model.childNodeInserted(
+        2 as Protocol.DOM.NodeId, 5 as Protocol.DOM.NodeId,
+        makeNodePayload(6, 'DIV', {parentId: 2 as Protocol.DOM.NodeId, attributes: ['slot', 'distributeMeAsWell_2']}));
+    treeOutline.runPendingUpdates();
+    assert.deepEqual(describeChildren(hostEl), [
+      '#shadow-root (open)',
+      '<div slot="distributeMeToYoungest">',
+      '<div slot="distributeMeToOldest">',
+      '<div slot="distributeMeAsWell_1">',
+      '<div slot="distributeMeAsWell_2">',
+      '</div>',
+    ]);
+    assert.strictEqual(hostEl.childAt(0), shadowEl);
+    assert.deepEqual(describeChildren(slotEl), ['<div id="fallbackOldest">', '</slot>']);
+  });
+
+  for (const [mode, expectedTitle] of [[Protocol.DOM.ShadowRootType.Open, '#shadow-root (open)'],
+                                       [Protocol.DOM.ShadowRootType.Closed, '#shadow-root (closed)'],
+  ] as const) {
+    it(`inserts a ${mode} #shadow-root before existing light children of an expanded host`, async () => {
+      // Mirrors legacy shadow/create-shadow-root.
+      const hostPayload = makeNodePayload(2, 'DIV', {
+        parentId: 1 as Protocol.DOM.NodeId,
+        attributes: ['id', 'container'],
+        children: [makeNodePayload(3, 'DIV', {parentId: 2 as Protocol.DOM.NodeId, attributes: ['id', 'child']})],
+      });
+      const rootNode = SDK.DOMModel.DOMNode.create(
+          model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [hostPayload]}));
+      treeOutline.rootDOMNode = rootNode;
+
+      const hostEl = await expandTreeElement(treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!);
+      assert.deepEqual(describeChildren(hostEl), ['<div id="child">', '</div>']);
+      const lightChildEl = hostEl.childAt(0);
+
+      model.shadowRootPushed(
+          2 as Protocol.DOM.NodeId, makeNodePayload(4, '#shadow-root', {
+            parentId: 2 as Protocol.DOM.NodeId,
+            nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+            shadowRootType: mode,
+            children: [makeNodePayload(5, 'DIV', {parentId: 4 as Protocol.DOM.NodeId, attributes: ['id', 'shadow-1']})],
+          }));
+      treeOutline.runPendingUpdates();
+
+      assert.deepEqual(describeChildren(hostEl), [expectedTitle, '<div id="child">', '</div>']);
+      // The light child tree element is reused, just moved after the shadow root.
+      assert.strictEqual(hostEl.childAt(1), lightChildEl);
+      const shadowEl = hostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement;
+      assert.strictEqual(shadowEl.widget.contentElement.textContent?.trim(), expectedTitle);
+      await expandTreeElement(shadowEl);
+      assert.deepEqual(describeChildren(shadowEl), ['<div id="shadow-1">']);
+      assert.include(
+          (shadowEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement).widget.contentElement.textContent,
+          'shadow-1');
+    });
+  }
+
+  it('renders slot shortcut links in distributed nodes order and removes them when unassigned', async () => {
+    // Mirrors legacy shadow/shadow-slot-assignment.
+    const shadowPayload = makeNodePayload(3, '#shadow-root', {
+      parentId: 2 as Protocol.DOM.NodeId,
+      nodeType: Node.DOCUMENT_FRAGMENT_NODE,
+      shadowRootType: Protocol.DOM.ShadowRootType.Open,
+      children: [
+        makeNodePayload(4, 'SLOT',
+                        {parentId: 3 as Protocol.DOM.NodeId, attributes: ['name', 'slot1'], distributedNodes: []}),
+        makeNodePayload(5, 'SLOT',
+                        {parentId: 3 as Protocol.DOM.NodeId, attributes: ['name', 'slot2'], distributedNodes: []}),
+      ],
+    });
+    const hostPayload = makeNodePayload(
+        2, 'DIV', {parentId: 1 as Protocol.DOM.NodeId, attributes: ['id', 'host1'], shadowRoots: [shadowPayload]});
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [hostPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const hostEl = await expandTreeElement(treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!);
+    const shadowEl = await expandTreeElement(hostEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement);
+    const slot1El = await expandTreeElement(shadowEl.childAt(0) as Elements.ElementsTreeElement.ElementsTreeElement);
+    const slot2El = await expandTreeElement(shadowEl.childAt(1) as Elements.ElementsTreeElement.ElementsTreeElement);
+    assert.deepEqual(describeChildren(slot1El), ['</slot>']);
+    assert.deepEqual(describeChildren(slot2El), ['</slot>']);
+
+    const span = {nodeType: Node.ELEMENT_NODE, nodeName: 'SPAN', backendNodeId: 6 as Protocol.DOM.BackendNodeId};
+    const h1 = {nodeType: Node.ELEMENT_NODE, nodeName: 'H1', backendNodeId: 7 as Protocol.DOM.BackendNodeId};
+    const text = {nodeType: Node.TEXT_NODE, nodeName: '#text', backendNodeId: 8 as Protocol.DOM.BackendNodeId};
+
+    model.childNodeInserted(
+        2 as Protocol.DOM.NodeId, 0 as Protocol.DOM.NodeId,
+        makeNodePayload(6, 'SPAN', {parentId: 2 as Protocol.DOM.NodeId, attributes: ['slot', 'slot2']}));
+    model.distributedNodesUpdated(5 as Protocol.DOM.NodeId, [span]);
+    treeOutline.runPendingUpdates();
+    assert.deepEqual(describeChildren(slot1El), ['</slot>']);
+    assert.deepEqual(describeChildren(slot2El), ['\u21AA <span> reveal', '</slot>']);
+
+    model.distributedNodesUpdated(5 as Protocol.DOM.NodeId, [span, h1, text]);
+    treeOutline.runPendingUpdates();
+    assert.deepEqual(describeChildren(slot2El),
+                     ['\u21AA <span> reveal', '\u21AA <h1> reveal', '\u21AA #text reveal', '</slot>']);
+
+    // Order follows the distributedNodes order reported by the backend.
+    model.distributedNodesUpdated(5 as Protocol.DOM.NodeId, [h1, span]);
+    treeOutline.runPendingUpdates();
+    assert.deepEqual(describeChildren(slot2El), ['\u21AA <h1> reveal', '\u21AA <span> reveal', '</slot>']);
+
+    // Reassigning to slot1 moves the links over.
+    model.distributedNodesUpdated(5 as Protocol.DOM.NodeId, []);
+    model.distributedNodesUpdated(4 as Protocol.DOM.NodeId, [span]);
+    treeOutline.runPendingUpdates();
+    assert.deepEqual(describeChildren(slot2El), ['</slot>']);
+    assert.deepEqual(describeChildren(slot1El), ['\u21AA <span> reveal', '</slot>']);
+  });
+
+  it('updates the "Show all nodes" label on DOM mutations while paginated and loads all via the button', async () => {
+    // Mirrors legacy elements/elements-panel-limited-children.
+    const children = Array.from({length: 10}, (_, i) => makeNodePayload(10 + i, 'DIV', {
+                                                parentId: 2 as Protocol.DOM.NodeId,
+                                                attributes: ['id', `id${i + 1}`],
+                                                children: [makeNodePayload(30 + i, '#text', {
+                                                  parentId: (10 + i) as Protocol.DOM.NodeId,
+                                                  nodeType: Node.TEXT_NODE,
+                                                  nodeValue: String(i + 1),
+                                                })],
+                                              }));
+    const dataPayload =
+        makeNodePayload(2, 'DIV', {parentId: 3 as Protocol.DOM.NodeId, attributes: ['id', 'data'], children});
+    const bodyPayload = makeNodePayload(3, 'BODY', {parentId: 1 as Protocol.DOM.NodeId, children: [dataPayload]});
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [bodyPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const dataEl = treeOutline.findTreeElement(model.nodeForId(2 as Protocol.DOM.NodeId)!)!;
+    dataEl.setExpandedChildrenLimit(5);
+    await expandTreeElement(dataEl);
+    treeOutline.runPendingUpdates();
+    assert.deepEqual(describeChildren(dataEl), [
+      '<div id="id1">',
+      '<div id="id2">',
+      '<div id="id3">',
+      '<div id="id4">',
+      '<div id="id5">',
+      '[Show all nodes (5 more)]',
+      '</div>',
+    ]);
+
+    // Protocol events produced by the legacy insertNode() page function:
+    // append <a>#50, remove #id2, insert <a>#51 before #id1, move #51 to the end, then back before #id1.
+    const anchor = (id: number) => makeNodePayload(id, 'A', {parentId: 2 as Protocol.DOM.NodeId});
+    model.childNodeInserted(2 as Protocol.DOM.NodeId, 19 as Protocol.DOM.NodeId, anchor(50));
+    model.childNodeRemoved(2 as Protocol.DOM.NodeId, 11 as Protocol.DOM.NodeId);
+    model.childNodeInserted(2 as Protocol.DOM.NodeId, 0 as Protocol.DOM.NodeId, anchor(51));
+    model.childNodeRemoved(2 as Protocol.DOM.NodeId, 51 as Protocol.DOM.NodeId);
+    model.childNodeInserted(2 as Protocol.DOM.NodeId, 50 as Protocol.DOM.NodeId, anchor(51));
+    model.childNodeRemoved(2 as Protocol.DOM.NodeId, 51 as Protocol.DOM.NodeId);
+    model.childNodeInserted(2 as Protocol.DOM.NodeId, 0 as Protocol.DOM.NodeId, anchor(51));
+    treeOutline.runPendingUpdates();
+
+    assert.deepEqual(describeChildren(dataEl), [
+      '<a>',
+      '<div id="id1">',
+      '<div id="id3">',
+      '<div id="id4">',
+      '<div id="id5">',
+      '[Show all nodes (6 more)]',
+      '</div>',
+    ]);
+    const button = dataEl.expandAllButtonElement?.button;
+    assert.exists(button);
+
+    button.click();
+    treeOutline.runPendingUpdates();
+
+    assert.isNull(dataEl.expandAllButtonElement);
+    assert.deepEqual(describeChildren(dataEl), [
+      '<a>',
+      '<div id="id1">',
+      '<div id="id3">',
+      '<div id="id4">',
+      '<div id="id5">',
+      '<div id="id6">',
+      '<div id="id7">',
+      '<div id="id8">',
+      '<div id="id9">',
+      '<div id="id10">',
+      '<a>',
+      '</div>',
+    ]);
+  });
+
+  it('switches an inline text element to separate child tree elements after a Range split', async () => {
+    // Mirrors legacy elements/modify-chardata (testModifyViaRange).
+    const textPayload = makeNodePayload(3, '#text', {
+      parentId: 2 as Protocol.DOM.NodeId,
+      nodeType: Node.TEXT_NODE,
+      nodeValue: 'Lorem ipsum dolor sit amet',
+    });
+    const divPayload = makeNodePayload(
+        2, 'DIV', {parentId: 1 as Protocol.DOM.NodeId, attributes: ['id', 'rangenode'], children: [textPayload]});
+    const rootNode = SDK.DOMModel.DOMNode.create(
+        model, null, false, makeNodePayload(1, '#document', {nodeType: Node.DOCUMENT_NODE, children: [divPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const divNode = model.nodeForId(2 as Protocol.DOM.NodeId)!;
+    const divEl = treeOutline.findTreeElement(divNode)!;
+    divEl.widget.performUpdate();
+    // Initially, the single text child is rendered inline in the element title.
+    assert.isFalse(divEl.isExpandable());
+    assert.strictEqual(divEl.childCount(), 0);
+    assert.strictEqual(divEl.widget.contentElement.querySelector('.webkit-html-text-node')?.textContent,
+                       'Lorem ipsum dolor sit amet');
+
+    // range.deleteContents() + range.insertNode(span) produce these protocol events.
+    model.characterDataModified(3 as Protocol.DOM.NodeId, 'Lorem ipslor sit amet');
+    model.characterDataModified(3 as Protocol.DOM.NodeId, 'Lorem ips');
+    model.childNodeInserted(
+        2 as Protocol.DOM.NodeId, 3 as Protocol.DOM.NodeId,
+        makeNodePayload(4, '#text',
+                        {parentId: 2 as Protocol.DOM.NodeId, nodeType: Node.TEXT_NODE, nodeValue: 'lor sit amet'}));
+    model.childNodeInserted(2 as Protocol.DOM.NodeId, 3 as Protocol.DOM.NodeId, makeNodePayload(5, 'SPAN', {
+                              parentId: 2 as Protocol.DOM.NodeId,
+                              children: [makeNodePayload(6, '#text', {
+                                parentId: 5 as Protocol.DOM.NodeId,
+                                nodeType: Node.TEXT_NODE,
+                                nodeValue: 'test',
+                              })],
+                            }));
+    treeOutline.runPendingUpdates();
+
+    assert.isTrue(divEl.isExpandable());
+    await expandTreeElement(divEl);
+    divEl.widget.performUpdate();
+    assert.isNull(divEl.widget.contentElement.querySelector('.webkit-html-text-node'));
+    assert.deepEqual(describeChildren(divEl), ['"Lorem ips"', '<span>', '"lor sit amet"', '</div>']);
+    const spanEl = divEl.childAt(1) as Elements.ElementsTreeElement.ElementsTreeElement;
+    spanEl.widget.performUpdate();
+    assert.strictEqual(spanEl.widget.contentElement.querySelector('.webkit-html-text-node')?.textContent, 'test');
+  });
+
+  it('does not fire SelectedNodeChanged when a child is appended to the parent of the selected node', async () => {
+    // Mirrors legacy elements/node-reselect-on-append-child.
+    const firstPayload = makeNodePayload(3, 'DIV', {
+      parentId: 2 as Protocol.DOM.NodeId,
+      attributes: ['id', 'first'],
+      children: [makeNodePayload(
+          4, '#text', {parentId: 3 as Protocol.DOM.NodeId, nodeType: Node.TEXT_NODE, nodeValue: 'First Child'})],
+    });
+    const parentPayload = makeNodePayload(2, 'DIV', {parentId: 1 as Protocol.DOM.NodeId, children: [firstPayload]});
+    const rootNode =
+        SDK.DOMModel.DOMNode.create(model, null, false, makeNodePayload(1, 'BODY', {children: [parentPayload]}));
+    treeOutline.rootDOMNode = rootNode;
+
+    const parentNode = model.nodeForId(2 as Protocol.DOM.NodeId)!;
+    const firstNode = model.nodeForId(3 as Protocol.DOM.NodeId)!;
+    const parentEl = await expandTreeElement(treeOutline.findTreeElement(parentNode)!);
+    treeOutline.selectDOMNode(firstNode);
+    const firstEl = treeOutline.findTreeElement(firstNode)!;
+    assert.strictEqual(treeOutline.selectedDOMNode(), firstNode);
+    assert.strictEqual(treeOutline.selectedTreeElement, firstEl);
+
+    const selectionChanged = sinon.spy();
+    treeOutline.addEventListener(Elements.DOMTreeWidget.ElementsTreeOutline.Events.SelectedNodeChanged,
+                                 selectionChanged);
+    const updateChildrenSpy = sinon.spy(
+        treeOutline as unknown as {updateChildren: (el: Elements.ElementsTreeElement.ElementsTreeElement) => void},
+        'updateChildren');
+
+    model.childNodeInserted(2 as Protocol.DOM.NodeId, 3 as Protocol.DOM.NodeId,
+                            makeNodePayload(5, 'DIV', {parentId: 2 as Protocol.DOM.NodeId}));
+    treeOutline.runPendingUpdates();
+
+    // The parent's children were actually re-rendered...
+    sinon.assert.calledWith(updateChildrenSpy, parentEl);
+    assert.deepEqual(describeChildren(parentEl), ['<div id="first">', '<div>', '</div>']);
+    // ...but the selection was preserved without a SelectedNodeChanged event.
+    sinon.assert.notCalled(selectionChanged);
+    assert.strictEqual(treeOutline.selectedDOMNode(), firstNode);
+    assert.strictEqual(treeOutline.selectedTreeElement, firstEl);
+    assert.isTrue(firstEl.selected);
+  });
+
+  it('unhides the tree outline and clears updateRecords when updateModifiedNodes throws with >10 modified nodes',
+     () => {
+       const children =
+           Array.from({length: 12},
+                      (_, i) => makeNodePayload(i + 2, 'DIV',
+                                                {parentId: 1 as Protocol.DOM.NodeId, attributes: ['id', `item-${i}`]}));
+       const rootNode = SDK.DOMModel.DOMNode.create(model, null, false, makeNodePayload(1, 'BODY', {children}));
+       treeOutline.rootDOMNode = rootNode;
+
+       const firstChild = model.nodeForId(2 as Protocol.DOM.NodeId)!;
+       const firstChildEl = treeOutline.findTreeElement(firstChild)!;
+       sinon.stub(firstChildEl, 'updateTitle').throws(new Error('Simulated updateTitle failure'));
+
+       for (let i = 0; i < 12; i++) {
+         model.attributeModified((i + 2) as Protocol.DOM.NodeId, 'class', 'updated');
+       }
+
+       assert.throws(() => treeOutline.runPendingUpdates(), 'Simulated updateTitle failure');
+       assert.isFalse(treeOutline.element.classList.contains('hidden'));
+
+       // Subsequent updates should not re-process the failed batch.
+       (firstChildEl.updateTitle as sinon.SinonStub).restore();
+       assert.doesNotThrow(() => treeOutline.runPendingUpdates());
+     });
 });

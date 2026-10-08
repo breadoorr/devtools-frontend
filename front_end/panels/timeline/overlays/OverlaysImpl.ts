@@ -12,6 +12,7 @@ import * as Trace from '../../../models/trace/trace.js';
 import type * as PerfUI from '../../../ui/legacy/components/perf_ui/perf_ui.js';
 import * as UI from '../../../ui/legacy/legacy.js';
 import {html, render} from '../../../ui/lit/lit.js';
+import * as SettingsUI from '../../../ui/settings/settings.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 
 import * as Components from './components/components.js';
@@ -371,7 +372,8 @@ export class Overlays extends EventTarget {
     this.#charts = init.charts;
     this.#queries = init.entryQueries;
     this.#entriesLinkInProgress = null;
-    this.#annotationsHiddenSetting = Common.Settings.Settings.instance().moduleSetting('annotations-hidden');
+    this.#annotationsHiddenSetting =
+        Common.Settings.Settings.instance().resolve(SettingsUI.TimelineSettings.annotationsHiddenSettingDescriptor);
     this.#annotationsHiddenSetting.addChangeListener(this.update.bind(this));
 
     // HTMLElements of both Flamecharts. They are used to get the mouse position over the Flamecharts.
@@ -1577,24 +1579,29 @@ export class Overlays extends EventTarget {
         return overlayElement;
       }
       case 'TIME_RANGE': {
-        const component = new Components.TimeRangeOverlay.TimeRangeOverlay(overlay.label);
-        component.duration = overlay.showDuration ? overlay.bounds.range : null;
-        component.canvasRect = this.#charts.mainChart.canvasBoundingClientRect();
-        component.addEventListener(Components.TimeRangeOverlay.TimeRangeLabelChangeEvent.eventName, event => {
-          const newLabel = (event as Components.TimeRangeOverlay.TimeRangeLabelChangeEvent).newLabel;
-          overlay.label = newLabel;
-          this.dispatchEvent(new AnnotationOverlayActionEvent(overlay, 'Update'));
-        });
-        component.addEventListener(Components.TimeRangeOverlay.TimeRangeRemoveEvent.eventName, () => {
-          this.dispatchEvent(new AnnotationOverlayActionEvent(overlay, 'Remove'));
-        });
-        component.addEventListener('mouseover', () => {
+        // clang-format off
+        render(html`${widget(Components.TimeRangeOverlay.TimeRangeOverlay, {
+          label: overlay.label,
+          duration: overlay.showDuration ? overlay.bounds.range : null,
+          canvasRect: this.#charts.mainChart.canvasBoundingClientRect(),
+          onLabelChange: (newLabel: string) => {
+            overlay.label = newLabel;
+            this.dispatchEvent(new AnnotationOverlayActionEvent(overlay, 'Update'));
+          },
+          onRemove: () => {
+            this.dispatchEvent(new AnnotationOverlayActionEvent(overlay, 'Remove'));
+          },
+        })}`, overlayElement);
+        // clang-format on
+        // Use enter and leave rather than over and out: the label's elements
+        // are in the light DOM, so over and out would also fire as the pointer
+        // moves between them.
+        overlayElement.addEventListener('mouseenter', () => {
           this.dispatchEvent(new TimeRangeMouseOverEvent(overlay));
         });
-        component.addEventListener('mouseout', () => {
+        overlayElement.addEventListener('mouseleave', () => {
           this.dispatchEvent(new TimeRangeMouseOutEvent());
         });
-        overlayElement.appendChild(component);
         return overlayElement;
       }
       case 'TIMESPAN_BREAKDOWN': {
@@ -1737,7 +1744,7 @@ export class Overlays extends EventTarget {
       case 'ENTRY_SELECTED':
         break;
       case 'TIME_RANGE': {
-        const component = element.querySelector('devtools-time-range-overlay');
+        const component = this.#timeRangeOverlayWidget(element);
         if (component) {
           component.duration = overlay.showDuration ? overlay.bounds.range : null;
           component.canvasRect = this.#charts.mainChart.canvasBoundingClientRect();
@@ -1794,6 +1801,18 @@ export class Overlays extends EventTarget {
         Platform.TypeScriptUtilities.assertNever(overlay, `Unexpected overlay ${overlay}`);
     }
   }
+
+  /**
+   * Returns the `TimeRangeOverlay` widget rendered into a `TIME_RANGE`
+   * overlay's element, or `null` if it has not been created yet. The widget is
+   * created when the element is first connected to the DOM.
+   */
+  #timeRangeOverlayWidget(element: HTMLElement): Components.TimeRangeOverlay.TimeRangeOverlay|null {
+    const widgetElement = element.querySelector('devtools-widget');
+    const widget = widgetElement ? UI.Widget.Widget.get(widgetElement) : undefined;
+    return widget instanceof Components.TimeRangeOverlay.TimeRangeOverlay ? widget : null;
+  }
+
   /**
    * Some overlays have custom logic within them to manage visibility of
    * labels/etc that can be impacted if the positioning or size of the overlay
@@ -1805,8 +1824,7 @@ export class Overlays extends EventTarget {
       case 'ENTRY_SELECTED':
         break;
       case 'TIME_RANGE': {
-        const component = element.querySelector('devtools-time-range-overlay');
-        component?.updateLabelPositioning();
+        this.#timeRangeOverlayWidget(element)?.updateLabelPositioning();
         break;
       }
       case 'ENTRY_LABEL':

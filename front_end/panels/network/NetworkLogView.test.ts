@@ -24,7 +24,6 @@ import {
   describeWithEnvironment,
   registerActions,
   registerNoopActions,
-  stubNoopSettings,
 } from '../../testing/EnvironmentHelpers.js';
 import {expectCalled} from '../../testing/ExpectStubCall.js';
 import {stubFileManager} from '../../testing/FileManagerHelpers.js';
@@ -35,6 +34,7 @@ import {activate} from '../../testing/ResourceTreeHelpers.js';
 import * as RenderCoordinator from '../../ui/components/render_coordinator/render_coordinator.js';
 import * as DataGrid from '../../ui/legacy/components/data_grid/data_grid.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as Settings from '../../ui/settings/settings.js';
 
 import * as Network from './network.js';
 
@@ -53,14 +53,6 @@ describeWithEnvironment('NetworkLogView', () => {
     connection.setSuccessHandler('Storage.getStorageKey', () => ({} as Protocol.Storage.GetStorageKeyResponse));
     const dummyStorage = new Common.Settings.SettingsStorage({});
 
-    for (const settingName of ['network-color-code-resource-types', 'network.group-by-frame']) {
-      Common.Settings.maybeRemoveSettingExtension(settingName);
-      Common.Settings.registerSettingExtension({
-        settingName,
-        settingType: Common.Settings.SettingType.BOOLEAN,
-        defaultValue: false,
-      });
-    }
     Common.Settings.Settings.instance({
       forceNew: true,
       syncedStorage: dummyStorage,
@@ -783,8 +775,8 @@ describeWithEnvironment('NetworkLogView', () => {
   });
 
   it('correctly shows/hides "Copy all as HAR (with sensitive data)" menu item', async () => {
-    const networkShowOptionsToGenerateHarWithSensitiveDataSetting = Common.Settings.Settings.instance().createSetting(
-        'network.show-options-to-generate-har-with-sensitive-data', false);
+    const networkShowOptionsToGenerateHarWithSensitiveDataSetting = Common.Settings.Settings.instance().resolve(
+        Settings.NetworkSettings.showOptionsToGenerateHarWithSensitiveDataSettingDescriptor);
     createNetworkRequest('url1', {target});
     networkLogView = createNetworkLogView(new UI.FilterBar.FilterBar('network-panel', true));
     renderElementIntoDOM(networkLogView);
@@ -830,6 +822,37 @@ describeWithEnvironment('NetworkLogView', () => {
     networkColumnWidget = columns.dataGrid().asWidget().parentWidget();
     assert.instanceOf(networkColumnWidget, UI.SplitWidget.SplitWidget);
     assert.strictEqual((networkColumnWidget).showMode(), UI.SplitWidget.ShowMode.BOTH);
+  });
+
+  it('persists waterfall and custom header column visibility across reloads', async () => {
+    const columnSettings = Common.Settings.Settings.instance().createSetting<Record<string, {
+      visible: boolean,
+      title?: string,
+    }>>('network-log-columns', {});
+    columnSettings.set({
+      'response-header-content-type': {visible: false, title: 'Content-Type'},
+      waterfall: {visible: true, title: 'Waterfall'},
+    });
+
+    // First open of NetworkLogView loads custom columns and settings.
+    networkLogView = createNetworkLogView();
+    let columns = networkLogView.columns();
+    columns.switchViewMode(true);
+    let networkColumnWidget = columns.dataGrid().asWidget().parentWidget();
+    assert.instanceOf(networkColumnWidget, UI.SplitWidget.SplitWidget);
+    assert.strictEqual(networkColumnWidget.showMode(), UI.SplitWidget.ShowMode.BOTH);
+    assert.isFalse(columns.dataGrid().visibleColumnsArray.some(c => c.id === 'response-header-content-type'));
+
+    // Second open of NetworkLogView (simulating closing and reopening DevTools) should preserve visibility.
+    networkLogView = createNetworkLogView();
+    columns = networkLogView.columns();
+    columns.switchViewMode(true);
+    networkColumnWidget = columns.dataGrid().asWidget().parentWidget();
+    assert.instanceOf(networkColumnWidget, UI.SplitWidget.SplitWidget);
+    assert.strictEqual(networkColumnWidget.showMode(), UI.SplitWidget.ShowMode.BOTH);
+    assert.isFalse(columns.dataGrid().visibleColumnsArray.some(c => c.id === 'response-header-content-type'));
+    assert.isTrue(columnSettings.get()['waterfall'].visible);
+    assert.isFalse(columnSettings.get()['response-header-content-type'].visible);
   });
 
   function createOverrideRequests() {
@@ -1508,14 +1531,6 @@ describeWithEnvironment('Edit and resend as fetch', () => {
     connection.setSuccessHandler('Storage.getStorageKey', () => ({} as Protocol.Storage.GetStorageKeyResponse));
     const dummyStorage = new Common.Settings.SettingsStorage({});
 
-    for (const settingName of ['network-color-code-resource-types', 'network.group-by-frame']) {
-      Common.Settings.maybeRemoveSettingExtension(settingName);
-      Common.Settings.registerSettingExtension({
-        settingName,
-        settingType: Common.Settings.SettingType.BOOLEAN,
-        defaultValue: false,
-      });
-    }
     Common.Settings.Settings.instance({
       forceNew: true,
       syncedStorage: dummyStorage,
@@ -1720,8 +1735,6 @@ describeWithEnvironment('NetworkLogView placeholder', () => {
   const RELOAD_ID = 'inspector-main.reload';
 
   beforeEach(() => {
-    stubNoopSettings();
-
     registerActions([
       {
         actionId: START_RECORDING_ID,
@@ -1763,7 +1776,6 @@ describeWithEnvironment('NetworkLogView placeholder', () => {
 
 describeWithEnvironment('NetworkLogView', () => {
   it('renders when actions aren\'t registered', async () => {
-    stubNoopSettings();
     sinon.stub(UI.ShortcutRegistry.ShortcutRegistry, 'instance').returns({
       shortcutTitleForAction: () => 'Ctrl',
       shortcutsForAction: () => [new UI.KeyboardShortcut.KeyboardShortcut(
@@ -1777,7 +1789,6 @@ describeWithEnvironment('NetworkLogView', () => {
   });
 
   it('shows Debug with AI menu and submenu items when the flag is on', () => {
-    stubNoopSettings();
     registerActions([{
       actionId: 'drjones.network-panel-context',
       title: () => 'Debug with AI' as Platform.UIString.LocalizedString,
@@ -1804,7 +1815,6 @@ describeWithEnvironment('NetworkLogView', () => {
   });
 
   it('configures visual logging for preloaded column in header context menu', () => {
-    stubNoopSettings();
     SDK.NetworkManager.MultitargetNetworkManager.instance({forceNew: true});
     const networkLogView = createNetworkLogView(new UI.FilterBar.FilterBar('network-test'));
     renderElementIntoDOM(networkLogView);
@@ -1817,7 +1827,6 @@ describeWithEnvironment('NetworkLogView', () => {
   });
 
   it('dispatches RequestSelected with null when reset', () => {
-    stubNoopSettings();
     const networkLogView = createNetworkLogView();
     const dispatchEventSpy = sinon.spy(networkLogView, 'dispatchEventToListeners');
 

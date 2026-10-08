@@ -10,9 +10,16 @@ import("../../visibility.gni")
 devtools_ui_module("settings") {
   sources = [
     "ConsoleSettings.ts",
+    "ElementsSettings.ts",
+    "EmulationSettings.ts",
     "InspectorMainSettings.ts",
+    "LayerViewerSettings.ts",
     "MainSettings.ts",
+    "NetworkSettings.ts",
     "SettingUIRegistration.ts",
+    "SourcesSettings.ts",
+    "TimelineSettings.ts",
+    "WhatsNewSettings.ts",
   ]
 
   ts_deps = [

@@ -4,7 +4,6 @@
 
 import {assert} from 'chai';
 
-import {expectConsoleLogs} from '../../../../testing/EnvironmentHelpers.js';
 import {TraceLoader} from '../../../../testing/TraceLoader.js';
 import * as Trace from '../../trace.js';
 import * as Lantern from '../lantern.js';
@@ -158,6 +157,20 @@ describe('NetworkAnalyzer', () => {
           NetworkAnalyzer.estimateIfConnectionWasReused(records as unknown as Trace.Lantern.Types.NetworkRequest[]);
       const expected = new Map([['1', false], ['2', false], ['3', true], ['4', true]]);
       assert.deepEqual(result, expected);
+    });
+
+    it('should estimate concurrent multiplexed (h2 and h3) requests as reused', () => {
+      for (const protocol of ['h2', 'h3', 'h3-Q050']) {
+        const records = [
+          createRecord({requestId: 1, networkRequestTime: 0, networkEndTime: 40, protocol}),
+          createRecord({requestId: 2, networkRequestTime: 10, networkEndTime: 40, protocol}),
+          createRecord({requestId: 3, networkRequestTime: 20, networkEndTime: 40, protocol}),
+        ];
+
+        const result = NetworkAnalyzer.estimateIfConnectionWasReused(records);
+        const expected = new Map([['1', false], ['2', true], ['3', true]]);
+        assert.deepEqual(result, expected, `unexpected reuse for protocol ${protocol}`);
+      }
     });
 
     it('should work on a real trace', () => {
@@ -494,9 +507,6 @@ describe('NetworkAnalyzer', () => {
   });
 
   describe('#resolveRedirects', () => {
-    expectConsoleLogs({
-      error: ['Error: missing metric scores for specified navigation'],
-    });
     it('should resolve to the same document when no redirect', () => {
       const mainDocument = NetworkAnalyzer.findResourceForUrl(requests, 'https://www.paulirish.com/');
       assert.isOk(mainDocument);

@@ -51,7 +51,7 @@ import {AccessibilityTreeView} from './AccessibilityTreeView.js';
 import {ColorSwatchPopoverIcon} from './ColorSwatchPopoverIcon.js';
 import * as ElementsComponents from './components/components.js';
 import {ComputedStyleWidget} from './ComputedStyleWidget.js';
-import {DOMTreeWidget, type ElementsTreeOutline} from './DOMTreeWidget.js';
+import {DOMTreeWidget} from './DOMTreeWidget.js';
 import elementsPanelStyles from './elementsPanel.css.js';
 import {LayoutPane} from './LayoutPane.js';
 import type {MarkerDecorator} from './MarkerDecorator.js';
@@ -105,19 +105,19 @@ const UIStrings = {
   /**
    * @description Warning/error text displayed when a node cannot be found in the current page.
    */
-  nodeCannotBeFoundInTheCurrent: 'Node cannot be found in the current page',
+  nodeCannotBeFoundInTheCurrent: 'Node can’t be found in the current page',
   /**
    * @description Console warning when a user tries to reveal a non-node type Remote Object. A remote
    * object is a JavaScript object that is not stored in DevTools, that DevTools has a connection to.
    * It should correspond to a local node.
    */
-  theRemoteObjectCouldNotBe: 'The remote object could not be resolved to a valid node',
+  theRemoteObjectCouldNotBe: 'The remote object couldn’t be resolved to a valid node',
   /**
    * @description Console warning when the user tries to reveal a deferred DOM Node that resolves as
    * null. A deferred DOM node is a node we know about but have not yet fetched from the backend (we
    * defer the work until later).
    */
-  theDeferredDomNodeCouldNotBe: 'The deferred `DOM` Node could not be resolved to a valid node',
+  theDeferredDomNodeCouldNotBe: 'The deferred `DOM` Node couldn’t be resolved to a valid node',
   /**
    * @description Text in Elements Panel of the Elements panel. Shows the current CSS Pseudo-classes
    * applicable to the selected HTML element.
@@ -224,10 +224,6 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
     return this.#targetManager;
   }
 
-  getTreeOutlineForTesting(): ElementsTreeOutline|undefined {
-    return this.#domTreeWidget.getTreeOutlineForTesting();
-  }
-
   getDOMTreeWidgetForTesting(): DOMTreeWidget {
     return this.#domTreeWidget;
   }
@@ -268,11 +264,11 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
     this.mainContainer.id = 'main-content';
     this.domTreeContainer.id = 'elements-content';
     this.domTreeContainer.tabIndex = -1;
-    // FIXME: crbug.com/425984
-    if (this.#settings.moduleSetting('dom-word-wrap').get()) {
+    const domWordWrapSetting = this.#settings.resolve(SettingsUI.ElementsSettings.domWordWrapSettingDescriptor);
+    if (domWordWrapSetting.get()) {
       this.domTreeContainer.classList.add('elements-wrap');
     }
-    this.#settings.moduleSetting('dom-word-wrap').addChangeListener(this.domWordWrapSettingChanged.bind(this));
+    domWordWrapSetting.addChangeListener(this.domWordWrapSettingChanged.bind(this));
 
     crumbsContainer.id = 'elements-crumbs';
     this.accessibilityTreeView = new AccessibilityTreeView();
@@ -311,8 +307,8 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
 
     this.pendingNodeReveal = false;
 
-    this.adornerManager =
-        new ElementsComponents.AdornerManager.AdornerManager(this.#settings.moduleSetting('adorner-settings'));
+    this.adornerManager = new ElementsComponents.AdornerManager.AdornerManager(
+        this.#settings.resolve(SettingsUI.ElementsSettings.adornerSettingsSettingDescriptor));
     this.adornersByName = new Map();
 
     this.#domTreeWidget = new DOMTreeWidget();
@@ -321,13 +317,14 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
     this.#domTreeWidget.onSelectedNodeChanged = this.selectedNodeChanged.bind(this);
     this.#domTreeWidget.onElementsTreeUpdated = this.updateBreadcrumbIfNeeded.bind(this);
     this.#domTreeWidget.onDocumentUpdated = this.documentUpdated.bind(this);
-    this.#domTreeWidget.setWordWrap(this.#settings.moduleSetting('dom-word-wrap').get());
+    this.#domTreeWidget.setWordWrap(domWordWrapSetting.get());
 
     this.#targetManager.observeModels(SDK.DOMModel.DOMModel, this, {scoped: true});
     this.#targetManager.addModelListener(SDK.ResourceTreeModel.ResourceTreeModel,
                                          SDK.ResourceTreeModel.Events.PrimaryPageChanged, this.onPrimaryPageChanged,
                                          this, {scoped: true});
-    this.#settings.moduleSetting('show-ua-shadow-dom').addChangeListener(this.showUAShadowDOMChanged.bind(this));
+    this.#settings.resolve(SettingsUI.ElementsSettings.showUAShadowDOMSettingDescriptor)
+        .addChangeListener(this.showUAShadowDOMChanged.bind(this));
     PanelCommon.ExtensionServer.ExtensionServer.instance().addEventListener(
         PanelCommon.ExtensionServer.Events.SidebarPaneAdded, this.extensionSidebarPaneAdded, this);
   }
@@ -776,7 +773,7 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
 
     this.searchConfig = searchConfig;
 
-    const showUAShadowDOM = this.#settings.moduleSetting('show-ua-shadow-dom').get();
+    const showUAShadowDOM = this.#settings.resolve(SettingsUI.ElementsSettings.showUAShadowDOMSettingDescriptor).get();
     const domModels = this.#targetManager.models(SDK.DOMModel.DOMModel, {scoped: true});
     const promises = domModels.map(domModel => domModel.performSearch(whitespaceTrimmedQuery, showUAShadowDOM));
     void Promise.all(promises).then(resultCounts => {
@@ -975,8 +972,9 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
     const {showPanel = true, focusNode = false, highlightInOverlay = true} = opts ?? {};
     this.omitDefaultSelection = true;
 
-    const node = this.#settings.moduleSetting('show-ua-shadow-dom').get() ? nodeToReveal :
-                                                                            this.leaveUserAgentShadowDOM(nodeToReveal);
+    const node = this.#settings.resolve(SettingsUI.ElementsSettings.showUAShadowDOMSettingDescriptor).get() ?
+        nodeToReveal :
+        this.leaveUserAgentShadowDOM(nodeToReveal);
     if (highlightInOverlay) {
       node.highlightForTwoSeconds();
     }
@@ -1530,7 +1528,8 @@ export class ElementsActionDelegate implements UI.ActionRegistration.ActionDeleg
         ElementsPanel.instance().toggleAccessibilityTree();
         return true;
       case 'elements.toggle-word-wrap': {
-        const setting = ElementsPanel.instance().settings.moduleSetting<boolean>('dom-word-wrap');
+        const setting =
+            ElementsPanel.instance().settings.resolve(SettingsUI.ElementsSettings.domWordWrapSettingDescriptor);
         setting.set(!setting.get());
         return true;
       }

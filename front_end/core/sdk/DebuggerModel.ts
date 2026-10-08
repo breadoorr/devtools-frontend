@@ -134,6 +134,35 @@ export const enum StepMode {
   STEP_OVER = 'StepOver',
 }
 
+/**
+ * A CDP step command. `ranges` is passed as `skipList` to stepInto/stepOver, and ignored for stepOut. `enterRanges` is
+ * passed as `enterRanges` to stepOver: functions within them are entered as if by stepInto.
+ */
+export interface AutoStep {
+  readonly command: StepMode;
+  readonly ranges: readonly LocationRange[];
+  readonly enterRanges?: readonly LocationRange[];
+}
+
+/**
+ * The step the user requested. It lives until a pause is presented to the user, or the user resumes or pauses, and
+ * allows the before-paused callback to continue the step automatically.
+ */
+export interface StepContext {
+  readonly mode: StepMode;
+  /** The call frames of the pause in which the user requested the step. */
+  readonly callFrames: readonly CallFrame[];
+}
+
+/** Computes the CDP step command for a user-requested step. */
+export type ComputeAutoStepCallback = (mode: StepMode, callFrames: readonly CallFrame[]) => Promise<AutoStep>;
+
+/**
+ * Invoked for every pause before it's presented. Returns null to present the pause, or the step to issue instead.
+ */
+export type BeforePausedCallback = (details: DebuggerPausedDetails, context: StepContext|null) =>
+    Promise<AutoStep|null>;
+
 export const WASM_SYMBOLS_PRIORITY: Protocol.Debugger.DebugSymbolsType[] = [
   Protocol.Debugger.DebugSymbolsType.ExternalDWARF,
   Protocol.Debugger.DebugSymbolsType.EmbeddedDWARF,
@@ -166,20 +195,15 @@ export class DebuggerModel extends SDKModel<EventTypes> {
   readonly #jsSourceMapsEnabledSetting: Common.Settings.Setting<boolean>;
   readonly #skipAllPausesSetting: Common.Settings.Setting<boolean>;
   #skipAllPausesTimeout?: ReturnType<typeof setTimeout>;
-  #beforePausedCallback: ((arg0: DebuggerPausedDetails, stepOver: Location|null) => Promise<boolean>)|null = null;
-  #computeAutoStepRangesCallback: ((arg0: StepMode, arg1: CallFrame) => Promise<Array<{
-                                     start: Location,
-                                     end: Location,
-                                   }>>)|null = null;
+  #beforePausedCallback: BeforePausedCallback|null = null;
+  #computeAutoStepCallback: ComputeAutoStepCallback|null = null;
   evaluateOnCallFrameCallback:
       ((arg0: CallFrame, arg1: EvaluationOptions) => Promise<EvaluationResult|null>)|null = null;
   #synchronizeBreakpointsCallback: ((script: Script) => Promise<void>)|null = null;
   // We need to be able to register listeners for individual breakpoints. As such, we dispatch
   // on breakpoint ids, which are not statically known. The event #payload will always be a `Location`.
   readonly #breakpointResolvedEventTarget = new Common.ObjectWrapper.ObjectWrapper<Record<string, Location>>();
-  // When stepping over with autostepping enabled, the context denotes the function to which autostepping is restricted
-  // to by way of its functionLocation (as per Debugger.CallFrame).
-  #autoSteppingContext: Location|null = null;
+  #stepContext: StepContext|null = null;
   #isPausing = false;
 
   constructor(target: Target) {
@@ -429,58 +453,68 @@ export class DebuggerModel extends SDKModel<EventTypes> {
     void this.agent.invoke_setBreakpointsActive({active: this.#breakpointsActiveSetting.get()});
   }
 
-  setComputeAutoStepRangesCallback(callback: ((arg0: StepMode, arg1: CallFrame) => Promise<LocationRange[]>)|null):
-      void {
-    this.#computeAutoStepRangesCallback = callback;
-  }
-
-  private async computeAutoStepSkipList(mode: StepMode): Promise<Protocol.Debugger.LocationRange[]> {
-    let ranges: LocationRange[] = [];
-    if (this.#computeAutoStepRangesCallback && this.#debuggerPausedDetails &&
-        this.#debuggerPausedDetails.callFrames.length > 0) {
-      const [callFrame] = this.#debuggerPausedDetails.callFrames;
-      ranges = await this.#computeAutoStepRangesCallback.call(null, mode, callFrame);
-    }
-    const skipList = ranges.map(({start, end}) => ({
-                                  scriptId: start.scriptId,
-                                  start: {lineNumber: start.lineNumber, columnNumber: start.columnNumber},
-                                  end: {lineNumber: end.lineNumber, columnNumber: end.columnNumber},
-                                }));
-    return sortAndMergeRanges(skipList);
+  setComputeAutoStepCallback(callback: ComputeAutoStepCallback|null): void {
+    this.#computeAutoStepCallback = callback;
   }
 
   async stepInto(): Promise<void> {
-    const skipList = await this.computeAutoStepSkipList(StepMode.STEP_INTO);
-    void this.agent.invoke_stepInto({breakOnAsyncCall: false, skipList});
+    await this.#userStep(StepMode.STEP_INTO);
   }
 
   async stepOver(): Promise<void> {
-    this.#autoSteppingContext = this.#debuggerPausedDetails?.callFrames[0]?.functionLocation() ?? null;
-    const skipList = await this.computeAutoStepSkipList(StepMode.STEP_OVER);
-    void this.agent.invoke_stepOver({skipList});
+    await this.#userStep(StepMode.STEP_OVER);
   }
 
   async stepOut(): Promise<void> {
-    const skipList = await this.computeAutoStepSkipList(StepMode.STEP_OUT);
-    if (skipList.length !== 0) {
-      void this.agent.invoke_stepOver({skipList});
-    } else {
-      void this.agent.invoke_stepOut();
-    }
+    await this.#userStep(StepMode.STEP_OUT);
   }
 
   scheduleStepIntoAsync(): void {
-    void this.computeAutoStepSkipList(StepMode.STEP_INTO).then(skipList => {
-      void this.agent.invoke_stepInto({breakOnAsyncCall: true, skipList});
+    void this.#userStep(StepMode.STEP_INTO, /* breakOnAsyncCall */ true);
+  }
+
+  async #userStep(mode: StepMode, breakOnAsyncCall = false): Promise<void> {
+    const callFrames = this.#debuggerPausedDetails?.callFrames ?? [];
+    this.#stepContext = {mode, callFrames};
+    const step = this.#computeAutoStepCallback && callFrames.length > 0 ?
+        await this.#computeAutoStepCallback(mode, callFrames) :
+        {command: mode, ranges: []};
+    this.#issueStep(step, breakOnAsyncCall);
+  }
+
+  #issueStep({command, ranges, enterRanges}: AutoStep, breakOnAsyncCall = false): void {
+    const toProtocolRange = ({start, end}: LocationRange): Protocol.Debugger.LocationRange => ({
+      scriptId: start.scriptId,
+      start: {lineNumber: start.lineNumber, columnNumber: start.columnNumber},
+      end: {lineNumber: end.lineNumber, columnNumber: end.columnNumber},
     });
+    const skipList = sortAndMergeRanges(ranges.map(toProtocolRange));
+    switch (command) {
+      case StepMode.STEP_INTO:
+        void this.agent.invoke_stepInto({breakOnAsyncCall, skipList});
+        break;
+      case StepMode.STEP_OVER: {
+        const request: Protocol.Debugger.StepOverRequest = {skipList};
+        if (enterRanges?.length) {
+          request.enterRanges = sortAndMergeRanges(enterRanges.map(toProtocolRange));
+        }
+        void this.agent.invoke_stepOver(request);
+        break;
+      }
+      case StepMode.STEP_OUT:
+        void this.agent.invoke_stepOut();
+        break;
+    }
   }
 
   resume(): void {
+    this.#stepContext = null;
     void this.agent.invoke_resume({terminateOnResume: false});
     this.#isPausing = false;
   }
 
   pause(): void {
+    this.#stepContext = null;
     this.#isPausing = true;
     this.skipAllPauses(false);
     void this.agent.invoke_pause();
@@ -569,7 +603,7 @@ export class DebuggerModel extends SDKModel<EventTypes> {
     this.#scripts.clear();
     this.#scriptsBySourceURL.clear();
     this.#discardableScripts = [];
-    this.#autoSteppingContext = null;
+    this.#stepContext = null;
   }
 
   scripts(): Script[] {
@@ -611,20 +645,22 @@ export class DebuggerModel extends SDKModel<EventTypes> {
     return this.#debuggerPausedDetails;
   }
 
-  private async setDebuggerPausedDetails(debuggerPausedDetails: DebuggerPausedDetails): Promise<boolean> {
+  /**
+   * @returns null if the pause was presented, or the step to issue instead, as decided by the before-paused callback.
+   */
+  private async setDebuggerPausedDetails(debuggerPausedDetails: DebuggerPausedDetails): Promise<AutoStep|null> {
     this.#isPausing = false;
     this.#debuggerPausedDetails = debuggerPausedDetails;
     if (this.#beforePausedCallback) {
-      if (!await this.#beforePausedCallback.call(null, debuggerPausedDetails, this.#autoSteppingContext)) {
-        return false;
+      const autoStep = await this.#beforePausedCallback(debuggerPausedDetails, this.#stepContext);
+      if (autoStep) {
+        return autoStep;
       }
     }
-    // If we resolved a location in auto-stepping callback, reset the
-    // auto-step-over context.
-    this.#autoSteppingContext = null;
+    this.#stepContext = null;
     this.dispatchEventToListeners(Events.DebuggerPaused, this);
     this.setSelectedCallFrame(debuggerPausedDetails.callFrames[0]);
-    return true;
+    return null;
   }
 
   private resetDebuggerPausedDetails(): void {
@@ -633,8 +669,7 @@ export class DebuggerModel extends SDKModel<EventTypes> {
     this.setSelectedCallFrame(null);
   }
 
-  setBeforePausedCallback(
-      callback: ((arg0: DebuggerPausedDetails, autoSteppingContext: Location|null) => Promise<boolean>)|null): void {
+  setBeforePausedCallback(callback: BeforePausedCallback|null): void {
     this.#beforePausedCallback = callback;
   }
 
@@ -676,12 +711,9 @@ export class DebuggerModel extends SDKModel<EventTypes> {
       }
     }
 
-    if (!await this.setDebuggerPausedDetails(pausedDetails)) {
-      if (this.#autoSteppingContext) {
-        void this.stepOver();
-      } else {
-        void this.stepInto();
-      }
+    const autoStep = await this.setDebuggerPausedDetails(pausedDetails);
+    if (autoStep) {
+      this.#issueStep(autoStep);
     }
   }
 
@@ -1480,8 +1512,15 @@ export class Scope implements ScopeChainEntry {
     return undefined;
   }
 
-  empty(): boolean {
-    return Boolean(this.#payload.empty);
+  /**
+   * Present iff V8 has no variable values to show for this scope, either because the scope
+   * declares no variables or because all of them are unavailable (e.g. optimized out).
+   *
+   * Such scopes are retained in {@link CallFrame.scopeChain} so they can be addressed via
+   * `scopeNumber` in `Debugger.evaluateOnCallFrame` and matched against source map scopes.
+   */
+  emptyReason(): Protocol.Debugger.ScopeEmptyReason|undefined {
+    return this.#payload.emptyReason;
   }
 
   extraProperties(): RemoteObjectProperty[] {

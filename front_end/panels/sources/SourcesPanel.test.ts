@@ -18,6 +18,7 @@ import {
   registerNoopActions,
 } from '../../testing/EnvironmentHelpers.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as SettingsUI from '../../ui/settings/settings.js';
 
 import * as Sources from './sources.js';
 
@@ -107,5 +108,79 @@ describeWithEnvironment('SourcesPanel', () => {
 
     sinon.assert.calledWith(
         visibilitySpy, sinon.match({data: sinon.match({location: sinon.match.string, hiddenViewId: sinon.match.any})}));
+  });
+  it('clears the UISourceCode flavor when the editor for it is closed', () => {
+    setUpEnvironment();
+    const sources = new Sources.SourcesPanel.SourcesPanel();
+    const context = UI.Context.Context.instance();
+    const uiSourceCode = createStubUISourceCode();
+    context.setFlavor(Workspace.UISourceCode.UISourceCode, uiSourceCode);
+
+    sources.sourcesView().dispatchEventToListeners(Sources.SourcesView.Events.EDITOR_CLOSED,
+                                                   {uiSourceCode, wasSelected: true});
+
+    assert.isNull(context.flavor(Workspace.UISourceCode.UISourceCode));
+  });
+
+  it('keeps the UISourceCode flavor when the editor for another file is closed', () => {
+    setUpEnvironment();
+    const sources = new Sources.SourcesPanel.SourcesPanel();
+    const context = UI.Context.Context.instance();
+    const uiSourceCode = createStubUISourceCode();
+    context.setFlavor(Workspace.UISourceCode.UISourceCode, uiSourceCode);
+
+    sources.sourcesView().dispatchEventToListeners(Sources.SourcesView.Events.EDITOR_CLOSED,
+                                                   {uiSourceCode: createStubUISourceCode(), wasSelected: false});
+
+    assert.strictEqual(context.flavor(Workspace.UISourceCode.UISourceCode), uiSourceCode);
+  });
+
+  it('reveals UISourceCode in navigator when editor is selected and auto-reveal is enabled', () => {
+    setUpEnvironment();
+    const sources = new Sources.SourcesPanel.SourcesPanel();
+    const revealStub = sinon.stub(sources, 'revealInNavigator');
+    const uiSourceCode = createStubUISourceCode();
+
+    Common.Settings.Settings.instance()
+        .resolve(SettingsUI.SourcesSettings.autoRevealInNavigatorSettingDescriptor)
+        .set(true);
+
+    sources.sourcesView().dispatchEventToListeners(Sources.SourcesView.Events.EDITOR_SELECTED, uiSourceCode);
+
+    sinon.assert.calledOnceWithExactly(revealStub, uiSourceCode, true);
+  });
+
+  it('does not reveal UISourceCode in navigator when editor is selected and auto-reveal is disabled', () => {
+    setUpEnvironment();
+    const sources = new Sources.SourcesPanel.SourcesPanel();
+    const revealStub = sinon.stub(sources, 'revealInNavigator');
+    const uiSourceCode = createStubUISourceCode();
+
+    Common.Settings.Settings.instance()
+        .resolve(SettingsUI.SourcesSettings.autoRevealInNavigatorSettingDescriptor)
+        .set(false);
+
+    sources.sourcesView().dispatchEventToListeners(Sources.SourcesView.Events.EDITOR_SELECTED, uiSourceCode);
+
+    sinon.assert.notCalled(revealStub);
+  });
+
+  it('announces navigator and debugger sidebar toggles', () => {
+    setUpEnvironment();
+    const sources = new Sources.SourcesPanel.SourcesPanel();
+    const alertSpy = sinon.spy(UI.ARIAUtils.LiveAnnouncer, 'alert');
+
+    sources.toggleNavigatorSidebar();
+    sources.toggleNavigatorSidebar();
+    sources.toggleDebuggerSidebar();
+    sources.toggleDebuggerSidebar();
+
+    assert.deepEqual(alertSpy.args.map(args => args[0]), [
+      'Navigator sidebar hidden',
+      'Navigator sidebar shown',
+      'Debugger sidebar hidden',
+      'Debugger sidebar shown',
+    ]);
+    alertSpy.restore();
   });
 });

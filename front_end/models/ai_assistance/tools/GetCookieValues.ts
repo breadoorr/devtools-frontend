@@ -17,6 +17,7 @@ import {
   type DataHandlerResult,
   type DataTool,
   type OriginLockCapability,
+  PermissionPrompt,
   type ServerLoggingCapability,
   ToolAnnotation,
   type ToolArgs,
@@ -41,6 +42,8 @@ export interface GetCookieValuesResult {
 export class GetCookieValuesTool implements DataTool<GetCookieValuesArgs, GetCookieValuesResult,
                                                      BaseToolCapability&OriginLockCapability&ServerLoggingCapability> {
   readonly name: ToolName = ToolName.GET_COOKIE_VALUES;
+  readonly permissionPrompt: PermissionPrompt = PermissionPrompt.ALLOW_ONCE;
+  readonly permissionTitle: string = lockedString('Allow reading cookie values?');
   readonly description: string =
       'Retrieve the values and detailed metadata of specific cookies by their names across origins.';
 

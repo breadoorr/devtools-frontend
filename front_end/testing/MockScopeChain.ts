@@ -273,10 +273,12 @@ export class MockDebuggerBackend {
   // Positions in |scopeDescriptor| are relative to the script content. For inline scripts (i.e. scripts with
   // a `startLine` or `startColumn` but without a sourceURL), they are shifted into raw V8 positions, which
   // are relative to the start of the surrounding document.
+  // |scopeObjects| and |emptyReasons| are index-aligned with the resulting scope chain (inner-most first).
   async createCallFrame(target: SDK.Target.Target, script: ScriptDescription, scopeDescriptor: string,
                         sourceMap: {url: string, content: string}|null,
                         scopeObjects: Protocol.Runtime.RemoteObject[] = [],
-                        emptyScopes: boolean[] = []): Promise<SDK.DebuggerModel.CallFrame> {
+                        emptyReasons: Array<Protocol.Debugger.ScopeEmptyReason|undefined> = []):
+      Promise<SDK.DebuggerModel.CallFrame> {
     const debuggerModel = target.model(SDK.DebuggerModel.DebuggerModel) as SDK.DebuggerModel.DebuggerModel;
     const scriptObject = await this.addScript(target, script, sourceMap);
 
@@ -292,13 +294,15 @@ export class MockDebuggerBackend {
                                        toRawLine(s.endLine), toRawColumn(s.endLine, s.endColumn)));
 
     const innerScope = scopeChain[0];
-    console.assert(scopeObjects.length <= scopeChain.length);
+    assert.isAtMost(scopeObjects.length, scopeChain.length);
     for (let i = 0; i < scopeObjects.length; ++i) {
       scopeChain[i].object = scopeObjects[i];
     }
-    for (let i = 0; i < emptyScopes.length && i < scopeChain.length; ++i) {
-      if (emptyScopes[i]) {
-        scopeChain[i].empty = true;
+    assert.isAtMost(emptyReasons.length, scopeChain.length);
+    for (let i = 0; i < emptyReasons.length; ++i) {
+      const emptyReason = emptyReasons[i];
+      if (emptyReason !== undefined) {
+        scopeChain[i].emptyReason = emptyReason;
       }
     }
 

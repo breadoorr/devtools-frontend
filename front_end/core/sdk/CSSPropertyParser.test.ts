@@ -137,8 +137,7 @@ describe('CSSPropertyParser', () => {
 
   describe('PropertyParser', () => {
     it('correctly identifies spacing', () => {
-      const requiresSpace = (a: string, b: string) =>
-          SDK.CSSPropertyParser.requiresSpace([{textContent: a}], [{textContent: b}]);
+      const requiresSpace = (a: string, b: string) => SDK.CSSPropertyParser.requiresSpace(a, b);
 
       assert.isTrue(requiresSpace('a', 'b'));
       assert.isFalse(requiresSpace('', 'text'));
@@ -170,19 +169,6 @@ describe('CSSPropertyParser', () => {
       assert.isFalse(requiresSpace('text', '* text'));
       assert.isFalse(requiresSpace('text', '{ text'));
       assert.isFalse(requiresSpace('text', '; text'));
-
-      assert.isTrue(
-          SDK.CSSPropertyParser.requiresSpace([{textContent: 'text'}, {textContent: null}], [{textContent: 'text'}]));
-      assert.isTrue(
-          SDK.CSSPropertyParser.requiresSpace([{textContent: 'text'}], [{textContent: null}, {textContent: 'text'}]));
-      assert.isTrue(SDK.CSSPropertyParser.requiresSpace([{textContent: 'text'}, {textContent: null}],
-                                                        [{textContent: null}, {textContent: 'text'}]));
-      assert.isFalse(
-          SDK.CSSPropertyParser.requiresSpace([{textContent: 'text'}, {textContent: null}], [{textContent: ' text'}]));
-      assert.isFalse(
-          SDK.CSSPropertyParser.requiresSpace([{textContent: 'text'}], [{textContent: null}, {textContent: ' text'}]));
-      assert.isFalse(SDK.CSSPropertyParser.requiresSpace([{textContent: 'text'}, {textContent: null}],
-                                                         [{textContent: null}, {textContent: ' text'}]));
     });
 
     it('parses comments', () => {
@@ -570,6 +556,27 @@ describe('CSSPropertyParser', () => {
         assert.strictEqual(match.type, 'px');
         assert.deepEqual(match.fallback, []);
       }
+    });
+
+    it('parses declarations containing inline comments around property names and values', () => {
+      const ast = tokenizeDeclaration('/* before-name */ background-color /* after-name */',
+                                      '/* before-val */ rgb(255, /* mid-val */ 0, 0) /* after-val */');
+      assert.strictEqual(ast.propertyName, 'background-color');
+
+      const matching = SDK.CSSPropertyParser.BottomUpTreeMatching.walk(ast, []);
+      assert.strictEqual(matching.getComputedPropertyValueText().trim(), 'rgb(255,  0, 0)');
+    });
+
+    it('gracefully handles declarations with an unterminated comment', () => {
+      assert.isNull(SDK.CSSPropertyParser.tokenizeDeclaration('color', 'red /* foo: bar;'));
+      assert.isNull(SDK.CSSPropertyParser.tokenizeDeclaration('/* color', 'red'));
+      assert.isNull(SDK.CSSPropertyParser.matchDeclaration('color', 'red /* foo: bar;', []));
+    });
+
+    it('gracefully handles declarations with an unclosed quote', () => {
+      assert.isNotNull(SDK.CSSPropertyParser.tokenizeDeclaration('color', 'red \' foo'));
+      assert.isNotNull(SDK.CSSPropertyParser.tokenizeDeclaration('color', 'red " foo'));
+      assert.isNotNull(SDK.CSSPropertyParser.matchDeclaration('color', 'red \' foo', []));
     });
   });
 });

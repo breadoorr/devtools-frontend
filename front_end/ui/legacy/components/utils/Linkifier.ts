@@ -158,7 +158,7 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
     }
 
     const uiSourceCode = info.uiLocation.uiSourceCode;
-    info.uiLocation = null;
+    info.uiLocation = undefined;
     const sourceCodeAnchors = anchorsByUISourceCode.get(uiSourceCode);
     if (sourceCodeAnchors) {
       sourceCodeAnchors.delete(anchor);
@@ -188,7 +188,7 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
   private static unbindBreakpoint(anchor: Element): void {
     const info = Linkifier.linkInfo(anchor);
     if (info?.revealable) {
-      info.revealable = null;
+      info.revealable = undefined;
     }
   }
 
@@ -214,7 +214,6 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
       if (!info) {
         continue;
       }
-      info.liveLocation = null;
       Linkifier.unbindUILocation(anchor);
       const fallback = info.fallback;
       if (fallback) {
@@ -264,11 +263,12 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
     const createLinkOptions: CreateLinkOptions = {
       tabStop: options?.tabStop,
       jslogContext: 'script-location',
+      allowPrivileged: options?.allowPrivileged,
     };
-    const {link, linkInfo} = Linkifier.createLink(
-        fallbackAnchor?.textContent ? fallbackAnchor.textContent : '', className, createLinkOptions);
+    const {link, linkInfo} = Linkifier.createLink(fallbackAnchor?.textContent ? fallbackAnchor.textContent : '',
+                                                  className, createLinkOptions);
     linkInfo.enableDecorator = this.useLinkDecorator;
-    linkInfo.fallback = fallbackAnchor;
+    linkInfo.fallback = fallbackAnchor ?? undefined;
     linkInfo.userMetric = options?.userMetric;
 
     const pool = this.locationPoolByTarget.get(rawLocation.debuggerModel.target());
@@ -286,13 +286,8 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
       await this.updateAnchor(link, linkDisplayOptions, liveLocation);
       this.dispatchEventToListeners(Events.LIVE_LOCATION_UPDATED, liveLocation);
     };
-    void Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance()
-        .createLiveLocation(rawLocation, updateDelegate.bind(this), pool)
-        .then(liveLocation => {
-          if (liveLocation) {
-            linkInfo.liveLocation = liveLocation;
-          }
-        });
+    void Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance().createLiveLocation(
+        rawLocation, updateDelegate.bind(this), pool);
 
     const anchors = (this.anchorsByTarget.get(rawLocation.debuggerModel.target()) as Element[]);
     anchors.push(link);
@@ -362,9 +357,10 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
     const createLinkOptions: CreateLinkOptions = {
       tabStop: options?.tabStop,
       jslogContext: 'script-location',
+      allowPrivileged: options?.allowPrivileged,
     };
-    const {link, linkInfo} = Linkifier.createLink(
-        fallbackAnchor?.textContent ? fallbackAnchor.textContent : '', className, createLinkOptions);
+    const {link, linkInfo} = Linkifier.createLink(fallbackAnchor?.textContent ? fallbackAnchor.textContent : '',
+                                                  className, createLinkOptions);
     linkInfo.fallback = fallbackAnchor;
     linkInfo.userMetric = options?.userMetric;
 
@@ -447,12 +443,8 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
       await this.updateAnchor(link, linkDisplayOptions, liveLocation);
       this.dispatchEventToListeners(Events.LIVE_LOCATION_UPDATED, liveLocation);
     };
-    void Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance()
-        .createStackTraceTopFrameLiveLocation(
-            debuggerModel.createRawLocationsByStackTrace(stackTrace), updateDelegate.bind(this), pool)
-        .then(liveLocation => {
-          linkInfo.liveLocation = liveLocation;
-        });
+    void Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance().createStackTraceTopFrameLiveLocation(
+        debuggerModel.createRawLocationsByStackTrace(stackTrace), updateDelegate.bind(this), pool);
 
     const anchors = (this.anchorsByTarget.get(target) as Element[]);
     anchors.push(link);
@@ -478,11 +470,8 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
       await this.updateAnchor(link, linkDisplayOptions, liveLocation);
       this.dispatchEventToListeners(Events.LIVE_LOCATION_UPDATED, liveLocation);
     };
-    void Bindings.CSSWorkspaceBinding.CSSWorkspaceBinding.instance()
-        .createLiveLocation(rawLocation, updateDelegate.bind(this), pool)
-        .then(liveLocation => {
-          linkInfo.liveLocation = liveLocation;
-        });
+    void Bindings.CSSWorkspaceBinding.CSSWorkspaceBinding.instance().createLiveLocation(
+        rawLocation, updateDelegate.bind(this), pool);
 
     const anchors = (this.anchorsByTarget.get(rawLocation.cssModel().target()) as Element[]);
     anchors.push(link);
@@ -580,7 +569,6 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
       anchor.firstElementChild?.style.setProperty('margin-left', '2px');
       render(icon, anchor, {renderBefore: anchor.firstElementChild});
     }
-    info.icon = icon;
   }
 
   static renderLinkifiedUrl(url: Platform.DevToolsPath.UrlString, options?: LinkifyURLOptions): TemplateResult {
@@ -647,6 +635,7 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
       columnNumber,
       userMetric: options?.userMetric,
       onRef: options.onRef,
+      allowPrivileged: options?.allowPrivileged,
     };
     return Linkifier.renderLink(linkText, className, linkOptions);
   }
@@ -712,17 +701,12 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
         } else {
           Linkifier.setTrimmedText(link, text, maxLength);
         }
-        const linkInfo = {
-          icon: null,
-          enableDecorator: false,
-          uiLocation: null,
-          liveLocation: null,
-          url: options.href || null,
-          lineNumber: options.lineNumber ?? null,
-          columnNumber: options.columnNumber ?? null,
-          revealable: null,
-          fallback: null,
+        const linkInfo: LinkInfo = {
+          url: options.href,
+          lineNumber: options.lineNumber,
+          columnNumber: options.columnNumber,
           userMetric: options.userMetric,
+          allowPrivileged: options.allowPrivileged,
         };
         infoByAnchor.set(link, linkInfo);
       });
@@ -811,6 +795,10 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
     return textByAnchor.get(node) || node.textContent || '';
   }
 
+  static untruncatedTextContent(node: Node): string {
+    return node.childTextNodes().map(Linkifier.untruncatedNodeText).join('');
+  }
+
   static linkInfo(link: Element|null): LinkInfo|null {
     return link ? infoByAnchor.get(link) || null : null as LinkInfo | null;
   }
@@ -833,8 +821,11 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
 
   static invokeFirstAction(linkInfo: LinkInfo): boolean {
     const actions = Linkifier.linkActions(linkInfo);
-    if (actions.length) {
-      void actions[0].handler.call(null);
+    // Only invoke a 'reveal' action on click so links without a reveal handler
+    // do not fall back to 'clipboard' actions (such as copying the URL).
+    const action = actions.find(a => a.section === 'reveal');
+    if (action) {
+      void action.handler.call(null);
       if (linkInfo.userMetric) {
         Host.userMetrics.actionTaken(linkInfo.userMetric);
       }
@@ -899,8 +890,7 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
   }
 
   static uiLocation(link: Element): Workspace.UISourceCode.UILocation|null {
-    const info = Linkifier.linkInfo(link);
-    return info ? info.uiLocation : null;
+    return Linkifier.linkInfo(link)?.uiLocation ?? null;
   }
 
   static linkActions(info: LinkInfo): Array<{
@@ -977,12 +967,15 @@ export class Linkifier extends Common.ObjectWrapper.ObjectWrapper<EventTypes> im
       }
     }
     if (resource || info.url) {
-      result.push({
-        section: 'reveal',
-        title: UI.UIUtils.openLinkExternallyLabel(),
-        jslogContext: 'open-in-new-tab',
-        handler: () => UIHelpers.openInNewTab(url),
-      });
+      // Only allow opening privileged URLs in a new tab when explicitly permitted via `allowPrivileged`.
+      if (!Common.ParsedURL.isPrivilegedScheme(url) || info.allowPrivileged) {
+        result.push({
+          section: 'reveal',
+          title: UI.UIUtils.openLinkExternallyLabel(),
+          jslogContext: 'open-in-new-tab',
+          handler: () => UIHelpers.openInNewTab(url, info.allowPrivileged),
+        });
+      }
       result.push({
         section: 'clipboard',
         title: UI.UIUtils.copyLinkAddressLabel(),
@@ -1128,13 +1121,13 @@ export class ContentProviderContextMenuProvider implements
       return;
     }
 
-    if (!Common.ParsedURL.schemeIs(contentUrl, 'file:')) {
+    if (!Common.ParsedURL.isPrivilegedScheme(contentUrl)) {
       contextMenu.revealSection().appendItem(
           UI.UIUtils.openLinkExternallyLabel(),
-          () => UIHelpers.openInNewTab(
-              contentUrl.endsWith(':formatted') ?
-                  Common.ParsedURL.ParsedURL.slice(contentUrl, 0, contentUrl.lastIndexOf(':')) :
-                  contentUrl),
+          () =>
+              UIHelpers.openInNewTab(contentUrl.endsWith(':formatted') ?
+                                         Common.ParsedURL.ParsedURL.slice(contentUrl, 0, contentUrl.lastIndexOf(':')) :
+                                         contentUrl),
           {jslogContext: 'open-in-new-tab'});
     }
     for (const origin of linkHandlers.keys()) {
@@ -1172,17 +1165,15 @@ export class ContentProviderContextMenuProvider implements
 }
 
 interface LinkInfo {
-  icon: LitTemplate|null;
-  enableDecorator: boolean;
-  uiLocation: Workspace.UISourceCode.UILocation|null;
-  liveLocation: Bindings.LiveLocation.LiveLocation|null;
-  url: Platform.DevToolsPath.UrlString|null;
-  lineNumber: number|null;
-  columnNumber: number|null;
-  revealable: Object|null;
-  fallback: Element|null;
+  enableDecorator?: boolean;
+  uiLocation?: Workspace.UISourceCode.UILocation;
+  url?: Platform.DevToolsPath.UrlString;
+  lineNumber?: number;
+  columnNumber?: number;
+  revealable?: Object;
+  fallback?: Element;
   userMetric?: Host.UserMetrics.Action;
-  jslogContext?: string;
+  allowPrivileged?: boolean;
 }
 
 export interface LinkifyURLOptions {
@@ -1233,6 +1224,7 @@ interface CreateLinkOptions {
   columnNumber?: number;
   userMetric?: Host.UserMetrics.Action;
   onRef?: (el: HTMLElement) => void;
+  allowPrivileged?: boolean;
 }
 
 interface LinkDisplayOptions {

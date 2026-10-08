@@ -87,7 +87,7 @@ describeWithEnvironment('BackForwardCacheView', () => {
     const component = await renderBackForwardCacheView();
     const sectionHeaders = component.contentElement.querySelectorAll('devtools-report-section-header');
     const sectionHeadersText = Array.from(sectionHeaders).map(sectionHeader => sectionHeader.textContent?.trim());
-    assert.deepEqual(sectionHeadersText, ['Actionable', 'Pending Support', 'Not Actionable']);
+    assert.deepEqual(sectionHeadersText, ['Actionable', 'Pending support', 'Not actionable']);
 
     const sections = component.contentElement.querySelectorAll('devtools-report-section');
     const sectionsText = Array.from(sections).map(section => section.textContent?.trim());
@@ -95,8 +95,8 @@ describeWithEnvironment('BackForwardCacheView', () => {
       'Not served from back/forward cache: to trigger back/forward cache, use Chrome’s back/forward buttons, or use the test button below to automatically navigate away and back',
       'Test back/forward cache',
       'ServiceWorker was unregistered while a page was in back/forward cache',
-      'Pages that use WebLocks are not currently eligible for back/forward cache',
-      'Pages whose main resource has cache-control:no-store cannot enter back/forward cache',
+      'Pages that use WebLocks aren’t currently eligible for back/forward cache',
+      'Pages whose main resource has cache-control:no-store can’t enter back/forward cache',
       'Learn more: back/forward cache eligibility',
     ];
     assert.deepEqual(sectionsText, expected);
@@ -188,14 +188,14 @@ describeWithEnvironment('BackForwardCacheView', () => {
     const component = await renderBackForwardCacheView();
     const sectionHeaders = component.contentElement.querySelectorAll('devtools-report-section-header');
     const sectionHeadersText = Array.from(sectionHeaders).map(sectionHeader => sectionHeader.textContent?.trim());
-    assert.deepEqual(sectionHeadersText, ['Pending Support']);
+    assert.deepEqual(sectionHeadersText, ['Pending support']);
 
     const sections = component.contentElement.querySelectorAll('devtools-report-section');
     const sectionsText = Array.from(sections).map(section => section.textContent?.trim());
     const expected = [
       'Not served from back/forward cache: to trigger back/forward cache, use Chrome’s back/forward buttons, or use the test button below to automatically navigate away and back',
       'Test back/forward cache',
-      'Pages that use WebLocks are not currently eligible for back/forward cache',
+      'Pages that use WebLocks aren’t currently eligible for back/forward cache',
       'Learn more: back/forward cache eligibility',
     ];
     assert.deepEqual(sectionsText, expected);

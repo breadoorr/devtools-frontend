@@ -58,6 +58,7 @@ import dataGridAiButtonStyles from '../../ui/legacy/components/data_grid/dataGri
 import * as PerfUI from '../../ui/legacy/components/perf_ui/perf_ui.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as Settings from '../../ui/settings/settings.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
 import {commentForbiddenHeaders, isForbiddenHeader} from './FetchHeaderCommenting.js';
@@ -600,11 +601,8 @@ export class NetworkLogView extends NetworkLogViewBase implements
   private readonly textFilterSetting: Common.Settings.Setting<string>;
   private networkRequestToNode: WeakMap<SDK.NetworkRequest.NetworkRequest, NetworkRequestNode>;
 
-  static #allowedSchemes = new Set(['http:', 'https:', 'ws:', 'wss:', 'data:']);
-
-  constructor(
-      filterBar: UI.FilterBar.FilterBar, progressBarContainer: Element,
-      networkLogLargeRowsSetting: Common.Settings.Setting<boolean>) {
+  constructor(filterBar: UI.FilterBar.FilterBar, progressBarContainer: Element,
+              networkLogLargeRowsSetting: Common.Settings.Setting<boolean>) {
     super();
     this.registerRequiredCSS(networkLogViewStyles);
     this.registerRequiredCSS(dataGridAiButtonStyles);
@@ -627,8 +625,8 @@ export class NetworkLogView extends NetworkLogViewBase implements
         Common.Settings.Settings.instance().createSetting('network-only-third-party-setting', false);
     this.networkResourceTypeFiltersSetting =
         Common.Settings.Settings.instance().createSetting('network-resource-type-filters', {});
-    this.networkShowOptionsToGenerateHarWithSensitiveData = Common.Settings.Settings.instance().createSetting(
-        'network.show-options-to-generate-har-with-sensitive-data', false);
+    this.networkShowOptionsToGenerateHarWithSensitiveData = Common.Settings.Settings.instance().resolve(
+        Settings.NetworkSettings.showOptionsToGenerateHarWithSensitiveDataSettingDescriptor);
 
     this.progressBarContainer = progressBarContainer;
     this.networkLogLargeRowsSetting = networkLogLargeRowsSetting;
@@ -719,7 +717,7 @@ export class NetworkLogView extends NetworkLogViewBase implements
         this.element, [UI.DropTarget.Type.File], i18nString(UIStrings.dropHarFilesHere), this.handleDrop.bind(this));
 
     Common.Settings.Settings.instance()
-        .moduleSetting('network-color-code-resource-types')
+        .resolve(Settings.NetworkSettings.colorCodeResourceTypesSettingDescriptor)
         .addChangeListener(this.invalidateAllItems.bind(this, false), this);
 
     SDK.TargetManager.TargetManager.instance().observeModels(SDK.NetworkManager.NetworkManager, this, {scoped: true});
@@ -733,7 +731,7 @@ export class NetworkLogView extends NetworkLogViewBase implements
 
     this.updateGroupByFrame();
     Common.Settings.Settings.instance()
-        .moduleSetting('network.group-by-frame')
+        .resolve(Settings.NetworkSettings.groupByFrameSettingDescriptor)
         .addChangeListener(() => this.updateGroupByFrame());
 
     this.filterBar = filterBar;
@@ -745,7 +743,8 @@ export class NetworkLogView extends NetworkLogViewBase implements
   }
 
   private updateGroupByFrame(): void {
-    const value = Common.Settings.Settings.instance().moduleSetting('network.group-by-frame').get();
+    const value =
+        Common.Settings.Settings.instance().resolve(Settings.NetworkSettings.groupByFrameSettingDescriptor).get();
     this.setGrouping(value ? 'Frame' : null);
   }
 
@@ -2477,16 +2476,14 @@ export class NetworkLogView extends NetworkLogViewBase implements
     return requests.filter(request => !request.isBlobRequest());
   }
 
-  static #getValidClipboardUrl(url: string): Platform.DevToolsPath.UrlString|null {
-    try {
-      const parsedUrl = new URL(url);
-      if (!NetworkLogView.#allowedSchemes.has(parsedUrl.protocol)) {
-        return null;
-      }
-      return url as Platform.DevToolsPath.UrlString;
-    } catch {
+  static #getValidClipboardUrl(url: Platform.DevToolsPath.UrlString): Platform.DevToolsPath.UrlString|null {
+    // `hasWebSafeScheme` unwraps `blob:` and `filesystem:` URLs to check their inner origin,
+    // but standalone CLI tools (cURL, PowerShell, fetch) cannot request browser-internal URLs.
+    if (Common.ParsedURL.schemeIs(url, 'blob:') || Common.ParsedURL.schemeIs(url, 'filesystem:') ||
+        !Common.ParsedURL.hasWebSafeScheme(url)) {
       return null;
     }
+    return url;
   }
 
   private async generateFetchCall(request: SDK.NetworkRequest.NetworkRequest, style: FetchStyle,

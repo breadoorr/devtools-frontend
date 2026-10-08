@@ -36,6 +36,17 @@ function getFunctionDeclarations(
   return callArgs.function_declarations ?? [];
 }
 
+function getContextChangeResponse(
+    responses: AiAssistance.AiAgent.ResponseData[],
+    ): AiAssistance.AiAgent.ContextChangeResponse {
+  const contextChange = responses.find(
+      (r): r is AiAssistance.AiAgent.ContextChangeResponse =>
+          r.type === AiAssistance.AiAgent.ResponseType.CONTEXT_CHANGE,
+  );
+  assert.exists(contextChange, 'Expected a CONTEXT_CHANGE response');
+  return contextChange;
+}
+
 /**
  * Helper to mock the skills registry for an agent.
  * Since the agent expects a full `Record<SkillName, Skill>`, but individual tests only
@@ -72,7 +83,7 @@ describe('AiAgent2', () => {
   });
   it('registers all expected skills', () => {
     assert.deepEqual(Object.keys(SKILLS).sort(),
-                     ['styling', 'network', 'accessibility', 'performance', 'storage', 'sources'].sort());
+                     ['styling', 'network', 'accessibility', 'performance', 'storage', 'sources', 'lighthouse'].sort());
   });
 
   it('accepts changeManager in options and passes it to tools', async () => {
@@ -491,7 +502,7 @@ describe('AiAgent2', () => {
       responses.push(response);
       if (response.type === AiAssistance.AiAgent.ResponseType.SIDE_EFFECT) {
         // Simulate user confirming the side effect
-        response.confirm(true);
+        response.confirm(AiAssistance.Tool.PermissionDecision.ALLOW_ONCE);
       }
       next = await runGenerator.next();
     }
@@ -765,7 +776,12 @@ describe('AiAgent2', () => {
     assert.isTrue(thirdCallArgs.metadata?.disable_user_content_logging);
   });
 
-  it('handles getCookieValues approval flow in AiAgent2', async () => {
+  async function runGetCookieValuesApprovalFlow(
+      decision = AiAssistance.Tool.PermissionDecision.ALLOW_ONCE,
+      ): Promise<{
+    responses: AiAssistance.AiAgent.ResponseData[],
+    handlerStub: sinon.SinonStub,
+  }> {
     const aidaClient = mockAidaClient([
       [{
         explanation: '',
@@ -783,7 +799,7 @@ describe('AiAgent2', () => {
       }],
     ]);
 
-    const sideEffectPromise = Promise.withResolvers<boolean>();
+    const sideEffectPromise = Promise.withResolvers<AiAssistance.Tool.PermissionDecision>();
     const agent = new AiAssistance.AiAgent2.AiAgent2({
       aidaClient,
       confirmSideEffectForTest: sinon.stub().returns(sideEffectPromise),
@@ -803,8 +819,13 @@ describe('AiAgent2', () => {
       return {result: {cookiesByOrigin: {'https://example.com': {cookies: []}}}};
     });
 
-    sideEffectPromise.resolve(true);
+    sideEffectPromise.resolve(decision);
     const responses = await Array.fromAsync(agent.run('get cookie session', {selected: null}));
+    return {responses, handlerStub};
+  }
+
+  it('handles getCookieValues approval flow in AiAgent2', async () => {
+    const {responses, handlerStub} = await runGetCookieValuesApprovalFlow();
 
     sinon.assert.calledTwice(handlerStub);
     const actionResponses = responses.filter((r): r is AiAssistance.AiAgent.ActionResponse => r.type === 'action');
@@ -814,6 +835,39 @@ describe('AiAgent2', () => {
     assert.isUndefined(actionResponses[1].output);
     assert.strictEqual(actionResponses[2].code, 'getCookieValues(["session"], ["https://example.com"])');
     assert.exists(actionResponses[2].output);
+  });
+
+  it('runs the tool with approved: true when the user picks ALLOW_ALWAYS', async () => {
+    const {handlerStub} = await runGetCookieValuesApprovalFlow(AiAssistance.Tool.PermissionDecision.ALLOW_ALWAYS);
+
+    sinon.assert.calledTwice(handlerStub);
+    assert.propertyVal(handlerStub.getCall(1).args[2], 'approved', true);
+  });
+
+  it('runs the tool with approved: true when the user picks ALLOW_ONCE', async () => {
+    const {handlerStub} = await runGetCookieValuesApprovalFlow(AiAssistance.Tool.PermissionDecision.ALLOW_ONCE);
+
+    sinon.assert.calledTwice(handlerStub);
+    assert.propertyVal(handlerStub.getCall(1).args[2], 'approved', true);
+  });
+
+  it('does not run the tool when the user picks SKIP', async () => {
+    const {responses, handlerStub} = await runGetCookieValuesApprovalFlow(AiAssistance.Tool.PermissionDecision.REJECT);
+
+    sinon.assert.calledOnce(handlerStub);
+    const canceled = responses.find((r): r is AiAssistance.AiAgent.ActionResponse => r.type === 'action' && r.canceled);
+    assert.exists(canceled);
+    assert.strictEqual(canceled.output, 'Error: User denied code execution with side effects.');
+  });
+
+  it('includes the tool permissionPrompt and permissionTitle in the SIDE_EFFECT response', async () => {
+    const {responses} = await runGetCookieValuesApprovalFlow();
+
+    const sideEffectResponse = responses.find((r): r is AiAssistance.AiAgent.SideEffectResponse =>
+                                                  r.type === AiAssistance.AiAgent.ResponseType.SIDE_EFFECT);
+    assert.exists(sideEffectResponse);
+    assert.strictEqual(sideEffectResponse.permissionPrompt, AiAssistance.Tool.PermissionPrompt.ALLOW_ONCE);
+    assert.strictEqual(sideEffectResponse.permissionTitle, 'Allow reading cookie values?');
   });
 
   it('provides getLighthouseReport capability to GetLighthouseAuditsTool', async () => {
@@ -836,13 +890,13 @@ describe('AiAgent2', () => {
       }],
     ]);
     const agent = new AiAssistance.AiAgent2.AiAgent2({aidaClient, originLock: defaultOriginLock});
-    const accessibilityContext = new AiAssistance.AccessibilityContext.AccessibilityContext(mockReport);
+    const lighthouseContext = new AiAssistance.LighthouseContext.LighthouseContext(mockReport);
 
     const getLighthouseAuditsTool = AiAssistance.ToolRegistry.ToolRegistry.get('getLighthouseAudits');
     assert.exists(getLighthouseAuditsTool);
     const handlerStub = sinon.stub(getLighthouseAuditsTool, 'handler').resolves({result: {audits: 'mock audits'}});
 
-    await Array.fromAsync(agent.run('query', {selected: accessibilityContext}));
+    await Array.fromAsync(agent.run('query', {selected: lighthouseContext}));
 
     sinon.assert.calledOnce(handlerStub);
     const [, context] = handlerStub.getCall(0).args;
@@ -863,10 +917,7 @@ describe('AiAgent2', () => {
       }],
       [{
         explanation: '',
-        functionCalls: [{name: 'runLighthouse', args: {explanation: 'run', category: 'accessibility'}}],
-      }],
-      [{
-        explanation: 'Audits run.',
+        functionCalls: [{name: 'runLighthouse', args: {explanation: 'run', categoryId: 'accessibility'}}],
       }],
     ]);
     const agent = new AiAssistance.AiAgent2.AiAgent2(
@@ -874,18 +925,50 @@ describe('AiAgent2', () => {
 
     const runLighthouseTool = AiAssistance.ToolRegistry.ToolRegistry.get('runLighthouse');
     assert.exists(runLighthouseTool);
-    const handlerStub = sinon.stub(runLighthouseTool, 'handler').resolves({result: {audits: 'mock audits'}});
+    const handlerSpy = sinon.spy(runLighthouseTool, 'handler');
+
+    const responses = await Array.fromAsync(agent.run('query', {selected: null}));
+
+    sinon.assert.calledOnce(handlerSpy);
+    sinon.assert.calledOnce(runLighthouseStub);
+    const contextChange = getContextChangeResponse(responses);
+    assert.strictEqual(contextChange.description, 'Lighthouse audit completed');
+    assert.instanceOf(contextChange.context, AiAssistance.LighthouseContext.LighthouseContext);
+    assert.strictEqual(contextChange.context.getItem(), mockReport);
+    assert.isUndefined(contextChange.widgets);
+  });
+
+  it('records a functionResponse after a ContextTool functionCall so history is valid for the next run', async () => {
+    const mockReport = {
+      finalDisplayedUrl: 'https://example.com',
+      categories: {},
+      audits: {},
+    } as unknown as LHModel.ReporterTypes.ReportJSON;
+    const aidaClient = mockAidaClient([
+      [{explanation: '', functionCalls: [{name: 'learnSkills', args: {skills: ['accessibility']}}]}],
+      [{
+        explanation: '',
+        functionCalls: [{name: 'runLighthouse', args: {explanation: 'run', categoryId: 'accessibility'}}],
+      }],
+    ]);
+    const agent = new AiAssistance.AiAgent2.AiAgent2(
+        {aidaClient, lighthouseRecording: sinon.stub().resolves(mockReport), originLock: defaultOriginLock});
 
     await Array.fromAsync(agent.run('query', {selected: null}));
 
-    sinon.assert.calledOnce(handlerStub);
-    const [, context] = handlerStub.getCall(0).args;
-    const runResult = await context.runLighthouse();
-    assert.strictEqual(runResult, mockReport);
-    sinon.assert.calledOnce(runLighthouseStub);
+    assert.deepEqual(agent.history.slice(-2), [
+      {
+        role: Host.AidaClient.Role.MODEL,
+        parts: [{functionCall: {name: 'runLighthouse', args: {explanation: 'run', categoryId: 'accessibility'}}}],
+      },
+      {
+        role: Host.AidaClient.Role.ROLE_UNSPECIFIED,
+        parts: [{functionResponse: {name: 'runLighthouse', response: {result: 'Lighthouse audit completed'}}}],
+      },
+    ]);
   });
 
-  it('returns null for getLighthouseReport when context is not AccessibilityContext', async () => {
+  it('returns null for getLighthouseReport when context is not LighthouseContext', async () => {
     const aidaClient = mockAidaClient([
       [{
         explanation: '',
@@ -910,6 +993,93 @@ describe('AiAgent2', () => {
     sinon.assert.calledOnce(handlerStub);
     const [, context] = handlerStub.getCall(0).args;
     assert.isNull(context.getLighthouseReport());
+  });
+
+  it('learns accessibility skill and invokes runLighthouse when a performance trace is selected', async () => {
+    const mockReport = {
+      finalDisplayedUrl: 'https://example.com',
+      categories: {},
+      audits: {},
+    } as unknown as LHModel.ReporterTypes.ReportJSON;
+    const runLighthouseStub = sinon.stub().resolves(mockReport);
+    const aidaClient = mockAidaClient([
+      [{
+        explanation: '',
+        functionCalls: [{name: 'learnSkills', args: {skills: ['accessibility']}}],
+      }],
+      [{
+        explanation: 'Running lighthouse audits',
+        functionCalls: [{name: 'runLighthouse', args: {explanation: 'Auditing page', categoryId: 'accessibility'}}],
+      }],
+    ]);
+    const agent = new AiAssistance.AiAgent2.AiAgent2({
+      aidaClient,
+      lighthouseRecording: runLighthouseStub,
+      originLock: defaultOriginLock,
+    });
+    const traceContext = sinon.createStubInstance(AiAssistance.PerformanceTraceContext.PerformanceTraceContext);
+
+    const runLighthouseTool = AiAssistance.ToolRegistry.ToolRegistry.get(AiAssistance.Tool.ToolName.RUN_LIGHTHOUSE);
+    assert.exists(runLighthouseTool);
+    const handlerSpy = sinon.spy(runLighthouseTool, 'handler');
+
+    const responses = await Array.fromAsync(
+        agent.run('record a lighthouse report and check accessibility score', {selected: traceContext}));
+
+    sinon.assert.calledOnce(handlerSpy);
+    sinon.assert.calledOnce(runLighthouseStub);
+    const actionResponses = responses.filter((r): r is AiAssistance.AiAgent.ActionResponse => r.type === 'action');
+    assert.lengthOf(actionResponses, 1);
+    assert.strictEqual(actionResponses[0].code, 'learnSkills(\'accessibility\')');
+    const contextChange = getContextChangeResponse(responses);
+    assert.strictEqual(contextChange.description, 'Lighthouse audit completed');
+    assert.instanceOf(contextChange.context, AiAssistance.LighthouseContext.LighthouseContext);
+    assert.strictEqual(contextChange.context.getItem(), mockReport);
+    assert.isUndefined(contextChange.widgets);
+  });
+
+  it('learns lighthouse skill and invokes runLighthouse with categoryId "all"', async () => {
+    const mockReport = {
+      finalDisplayedUrl: 'https://example.com',
+      categories: {},
+      audits: {},
+    } as unknown as LHModel.ReporterTypes.ReportJSON;
+    const runLighthouseStub = sinon.stub().resolves(mockReport);
+    const aidaClient = mockAidaClient([
+      [{
+        explanation: '',
+        functionCalls: [{name: 'learnSkills', args: {skills: ['lighthouse']}}],
+      }],
+      [{
+        explanation: 'Running all lighthouse audits',
+        functionCalls:
+            [{name: 'runLighthouse', args: {explanation: 'Full audit of page', categoryId: 'all', mode: 'navigation'}}],
+      }],
+    ]);
+    const agent = new AiAssistance.AiAgent2.AiAgent2({
+      aidaClient,
+      lighthouseRecording: runLighthouseStub,
+      originLock: defaultOriginLock,
+    });
+
+    const runLighthouseTool = AiAssistance.ToolRegistry.ToolRegistry.get(AiAssistance.Tool.ToolName.RUN_LIGHTHOUSE);
+    assert.exists(runLighthouseTool);
+    const handlerSpy = sinon.spy(runLighthouseTool, 'handler');
+
+    const responses = await Array.fromAsync(agent.run('run a full lighthouse audit of this page', {selected: null}));
+
+    sinon.assert.calledOnce(handlerSpy);
+    sinon.assert.calledWith(handlerSpy, sinon.match({categoryId: 'all', mode: 'navigation'}));
+    sinon.assert.calledOnce(runLighthouseStub);
+    const actionResponses = responses.filter((r): r is AiAssistance.AiAgent.ActionResponse => r.type === 'action');
+    assert.lengthOf(actionResponses, 1);
+    assert.strictEqual(actionResponses[0].code, 'learnSkills(\'lighthouse\')');
+    assert.isTrue(agent.activeSkills.has('lighthouse'));
+    const contextChange = getContextChangeResponse(responses);
+    assert.strictEqual(contextChange.description, 'Lighthouse audit completed');
+    assert.instanceOf(contextChange.context, AiAssistance.LighthouseContext.LighthouseContext);
+    assert.strictEqual(contextChange.context.getItem(), mockReport);
+    assert.isUndefined(contextChange.widgets);
   });
 
   it('provides getPerformanceTraceContext capability to performance tools', async () => {
@@ -1203,6 +1373,273 @@ describe('AiAgent2', () => {
       await Array.fromAsync(agent.run('question', {selected: null}));
 
       sinon.assert.calledOnce(requestStub);
+    });
+  });
+
+  describe('follow-up suggestions', () => {
+    describe('in a completed response', () => {
+      /**
+       * Parses `input` as a completed response and asserts both the remaining
+       * `answer` text (defaulting to `''`) and the extracted `suggestions`
+       * (defaulting to `undefined`).
+       */
+      function assertSuggestions(
+          input: string,
+          expected: {answer?: string, suggestions?: [string, ...string[]]} = {},
+          ): void {
+        const agent = new AiAssistance.AiAgent2.AiAgent2({aidaClient: mockAidaClient(), originLock: defaultOriginLock});
+        const parsed = agent.parseTextResponse(input);
+        assert.strictEqual(parsed.answer, expected.answer ?? '');
+        assert.deepEqual(parsed.suggestions, expected.suggestions);
+      }
+
+      it('extracts suggestions from a SUGGESTIONS line at the end', () => {
+        assertSuggestions('SUGGESTIONS: ["how to fix", "why it fails"]', {
+          suggestions: ['how to fix', 'why it fails'],
+        });
+        assertSuggestions('Answer.\nSUGGESTIONS: ["a", "b"]', {
+          answer: 'Answer.',
+          suggestions: ['a', 'b'],
+        });
+        assertSuggestions('Answer.\n\nSUGGESTIONS: ["a"]\n\n', {
+          answer: 'Answer.',
+          suggestions: ['a'],
+        });
+      });
+
+      it('keeps the text before a directive on the same line', () => {
+        assertSuggestions('Done. SUGGESTIONS: ["a"]', {
+          answer: 'Done.',
+          suggestions: ['a'],
+        });
+        assertSuggestions('Here is the solution to apply. **Suggestions**: ["inspect element", "check styles"]', {
+          answer: 'Here is the solution to apply.',
+          suggestions: ['inspect element', 'check styles'],
+        });
+        assertSuggestions('**Suggestions**: [1] Fix contrast. SUGGESTIONS: ["fix color", "adjust size"]', {
+          answer: '**Suggestions**: [1] Fix contrast.',
+          suggestions: ['fix color', 'adjust size'],
+        });
+      });
+
+      it('extracts suggestions across markdown formatting, list prefixes, and case variations', () => {
+        const expected = {suggestions: ['fix color', 'adjust size'] as [string, ...string[]]};
+        assertSuggestions('SUGGESTIONS:  ["fix color", "adjust size"]', expected);
+        assertSuggestions('suggestions: ["fix color", "adjust size"]', expected);
+        assertSuggestions('**Suggestions**: ["fix color", "adjust size"]', expected);
+        assertSuggestions('**SUGGESTIONS:** ["fix color", "adjust size"]', expected);
+        assertSuggestions('**SUGGESTIONS: ["fix color", "adjust size"]**', expected);
+        assertSuggestions('*Suggestions*: ["fix color", "adjust size"]', expected);
+        assertSuggestions('*Suggestions: ["fix color", "adjust size"]*', expected);
+        assertSuggestions('***Suggestions***: ["fix color", "adjust size"]', expected);
+        assertSuggestions('_Suggestions_: ["fix color", "adjust size"]', expected);
+        assertSuggestions('_Suggestions: ["fix color", "adjust size"]_', expected);
+        assertSuggestions('__SUGGESTIONS__: ["fix color", "adjust size"]', expected);
+        assertSuggestions('__SUGGESTIONS: ["fix color", "adjust size"]__', expected);
+        assertSuggestions('`SUGGESTIONS`: ["fix color", "adjust size"]', expected);
+        assertSuggestions('`SUGGESTIONS:` ["fix color", "adjust size"]', expected);
+        assertSuggestions('SUGGESTIONS: `["fix color", "adjust size"]`', expected);
+        assertSuggestions('- Suggestions: ["fix color", "adjust size"]', expected);
+        assertSuggestions('* Suggestions: ["fix color", "adjust size"]', expected);
+        assertSuggestions('1. Suggestions: ["fix color", "adjust size"]', expected);
+        assertSuggestions('### Suggestions: ["fix color", "adjust size"]', expected);
+      });
+
+      it('extracts suggestions that contain square brackets', () => {
+        assertSuggestions('SUGGESTIONS: ["Why does [type=text] fail?", "check [disabled] attribute"]', {
+          suggestions: ['Why does [type=text] fail?', 'check [disabled] attribute'],
+        });
+      });
+
+      it('sanitizes suggestions', () => {
+        assertSuggestions('SUGGESTIONS: ["valid", 123, null, {"key": "val"}]', {
+          suggestions: ['valid'],
+        });
+        assertSuggestions(`SUGGESTIONS: ["${'a'.repeat(300)}"]`, {
+          suggestions: ['a'.repeat(200)],
+        });
+        assertSuggestions('SUGGESTIONS: ["line1\\nline2", "word1\\r\\nword2", "excessive   spaces"]', {
+          suggestions: ['line1 line2', 'word1 word2', 'excessive spaces'],
+        });
+      });
+
+      it('removes a directive with no usable suggestions', () => {
+        assertSuggestions('SUGGESTIONS: []');
+        assertSuggestions('SUGGESTIONS: [""]');
+        assertSuggestions('Answer.\n**Suggestions**: ["", "   ", "\\n\\n"]', {answer: 'Answer.'});
+      });
+
+      it('removes a plain SUGGESTIONS directive even if its array is not valid JSON', () => {
+        assertSuggestions('Done. SUGGESTIONS: [\'a\']', {answer: 'Done.'});
+        assertSuggestions('Answer.\nSUGGESTIONS: ["a", "b",]', {answer: 'Answer.'});
+        assertSuggestions('Answer.\nSUGGESTIONS: ["a", "b', {answer: 'Answer.'});
+        assertSuggestions('Answer.\nSUGGESTIONS: ["a"] and more text', {answer: 'Answer.'});
+        assertSuggestions('SUGGESTIONS:');
+        assertSuggestions('SUGGESTIONS: "not an array"');
+        assertSuggestions('- SUGGESTIONS: [');
+      });
+
+      it('keeps other spellings of the directive if the array is not valid JSON', () => {
+        assertSuggestions('**Suggestions**: [invalid json]', {answer: '**Suggestions**: [invalid json]'});
+        assertSuggestions('Answer.\n**Suggestions**: ["a", "b', {answer: 'Answer.\n**Suggestions**: ["a", "b'});
+        assertSuggestions('**SUGGESTIONS:** [\'a\']', {answer: '**SUGGESTIONS:** [\'a\']'});
+        assertSuggestions('Suggestions: check the padding', {answer: 'Suggestions: check the padding'});
+        assertSuggestions('Here are some suggestions: try changing the color.', {
+          answer: 'Here are some suggestions: try changing the color.',
+        });
+      });
+
+      it('keeps lines that only resemble a directive', () => {
+        assertSuggestions('A few suggestions: [see docs](https://example.com)', {
+          answer: 'A few suggestions: [see docs](https://example.com)',
+        });
+        assertSuggestions('suggestions: ["a", "b"],', {answer: 'suggestions: ["a", "b"],'});
+        assertSuggestions('const DEFAULT_SUGGESTIONS: string[] = [];', {
+          answer: 'const DEFAULT_SUGGESTIONS: string[] = [];',
+        });
+        assertSuggestions('Use DEFAULT_SUGGESTIONS: ["a", "b"]', {answer: 'Use DEFAULT_SUGGESTIONS: ["a", "b"]'});
+      });
+
+      it('only treats the last line as a directive', () => {
+        assertSuggestions('Here are some suggestions:\n- Bullet 1', {answer: 'Here are some suggestions:\n- Bullet 1'});
+        assertSuggestions('**Suggestions**:\n- Fix padding', {answer: '**Suggestions**:\n- Fix padding'});
+        assertSuggestions('**Suggestions**:\n- Fix A\nSUGGESTIONS: ["a"]', {
+          answer: '**Suggestions**:\n- Fix A',
+          suggestions: ['a'],
+        });
+        assertSuggestions('Answer.\nSUGGESTIONS: ["a"]\nMore text.', {
+          answer: 'Answer.\nSUGGESTIONS: ["a"]\nMore text.',
+        });
+        assertSuggestions('Answer.\nSUGGESTIONS: ["first"]\nMore.\nSUGGESTIONS: ["second"]', {
+          answer: 'Answer.\nSUGGESTIONS: ["first"]\nMore.',
+          suggestions: ['second'],
+        });
+      });
+
+      it('does not change code blocks', () => {
+        const openArray =
+            ['```js', 'const config = {', '  suggestions: [', '    \'a\',', '  ],', '};', '```'].join('\n');
+        assertSuggestions(openArray, {answer: openArray});
+
+        const doubleQuoted = ['```js', 'const config = {', '  suggestions: ["a", "b"],', '};', '```'].join('\n');
+        assertSuggestions(doubleQuoted, {answer: doubleQuoted});
+
+        const upperCase = ['```yaml', 'SUGGESTIONS: ["a"]', '```'].join('\n');
+        assertSuggestions(upperCase, {answer: upperCase});
+
+        assertSuggestions('```js\n  suggestions: [', {answer: '```js\n  suggestions: ['});
+      });
+
+      it('extracts suggestions after a closed code block', () => {
+        assertSuggestions('```js\nconst x = 1;\n```\nSUGGESTIONS: ["a"]', {
+          answer: '```js\nconst x = 1;\n```',
+          suggestions: ['a'],
+        });
+      });
+
+      it('does not extract suggestions from an answer wrapped in a 5-backtick code chunk', () => {
+        const wrapped = '`````\nhello world\nSUGGESTIONS: ["a"]\n`````';
+        assertSuggestions(wrapped, {answer: wrapped});
+      });
+
+      it('returns an empty answer for an empty response', () => {
+        assertSuggestions('');
+        assertSuggestions('  \n  ');
+      });
+    });
+
+    describe('while the response is streaming', () => {
+      /**
+       * Runs the agent with a response that streams as `chunks`, where each
+       * chunk is the full text received so far. Returns the text of each
+       * partial answer shown while streaming, and the completed answer.
+       */
+      async function runWithStreamedResponse(chunks: [string, ...string[]]):
+          Promise<{partialAnswers: string[], completedAnswer: AiAssistance.AiAgent.AnswerResponse | undefined}> {
+        const [firstChunk, ...otherChunks] = chunks;
+        const agent = new AiAssistance.AiAgent2.AiAgent2({
+          aidaClient: mockAidaClient([[{explanation: firstChunk}, ...otherChunks.map(explanation => ({explanation}))]]),
+          originLock: defaultOriginLock,
+        });
+        const responses = await Array.fromAsync(agent.run('question', {selected: null}));
+        const answers = responses.filter((response): response is AiAssistance.AiAgent.AnswerResponse =>
+                                             response.type === AiAssistance.AiAgent.ResponseType.ANSWER);
+        return {
+          partialAnswers: answers.filter(answer => !answer.complete).map(answer => answer.text),
+          completedAnswer: answers.find(answer => answer.complete),
+        };
+      }
+
+      it('hides a streaming directive whose suggestion text contains a closing bracket', async () => {
+        const {partialAnswers, completedAnswer} = await runWithStreamedResponse([
+          'Answer.',
+          'Answer.\nSUGGESTIONS: ["Why does [type=text] fail?", "Ano',
+          'Answer.\nSUGGESTIONS: ["Why does [type=text] fail?", "Another"]',
+        ]);
+        assert.deepEqual(partialAnswers, ['Answer.', 'Answer.']);
+        assert.strictEqual(completedAnswer?.text, 'Answer.');
+        assert.deepEqual(completedAnswer?.suggestions, ['Why does [type=text] fail?', 'Another']);
+      });
+
+      it('keeps the text before a streaming directive on the same line', async () => {
+        const {partialAnswers, completedAnswer} = await runWithStreamedResponse([
+          'Done. SUGGESTIONS: ["Why does [type=t',
+          'Done. SUGGESTIONS: ["Why does [type=text] fail?"]',
+        ]);
+        assert.deepEqual(partialAnswers, ['Done.']);
+        assert.strictEqual(completedAnswer?.text, 'Done.');
+        assert.deepEqual(completedAnswer?.suggestions, ['Why does [type=text] fail?']);
+      });
+
+      it('hides other spellings of a streaming directive', async () => {
+        const {partialAnswers, completedAnswer} = await runWithStreamedResponse([
+          'Answer.\n**Suggestions**: ["a", "b',
+          'Answer.\n**Suggestions**: ["a", "b"]',
+        ]);
+        assert.deepEqual(partialAnswers, ['Answer.']);
+        assert.strictEqual(completedAnswer?.text, 'Answer.');
+        assert.deepEqual(completedAnswer?.suggestions, ['a', 'b']);
+      });
+
+      it('shows no partial answer while only a directive has streamed', async () => {
+        const {partialAnswers, completedAnswer} = await runWithStreamedResponse([
+          'SUGGESTIONS: ["a',
+          'SUGGESTIONS: ["a"]',
+        ]);
+        assert.deepEqual(partialAnswers, []);
+        assert.strictEqual(completedAnswer?.text, '');
+        assert.deepEqual(completedAnswer?.suggestions, ['a']);
+      });
+
+      it('shows hidden prose again once the next line streams', async () => {
+        const {partialAnswers, completedAnswer} = await runWithStreamedResponse([
+          'Here are some suggestions:',
+          'Here are some suggestions:\n- Fix padding',
+          'Here are some suggestions:\n- Fix padding\n- Fix margin',
+        ]);
+        assert.deepEqual(partialAnswers, ['Here are some', 'Here are some suggestions:\n- Fix padding']);
+        assert.strictEqual(completedAnswer?.text, 'Here are some suggestions:\n- Fix padding\n- Fix margin');
+        assert.isUndefined(completedAnswer?.suggestions);
+      });
+
+      it('shows a non-plain directive with an invalid array once the response completes', async () => {
+        const {partialAnswers, completedAnswer} = await runWithStreamedResponse([
+          'Answer.\n**Suggestions**: [invalid',
+          'Answer.\n**Suggestions**: [invalid json]',
+        ]);
+        assert.deepEqual(partialAnswers, ['Answer.']);
+        assert.strictEqual(completedAnswer?.text, 'Answer.\n**Suggestions**: [invalid json]');
+        assert.isUndefined(completedAnswer?.suggestions);
+      });
+
+      it('does not hide an identifier that contains the keyword', async () => {
+        const {partialAnswers, completedAnswer} = await runWithStreamedResponse([
+          'const DEFAULT_SUGGESTIONS:',
+          'const DEFAULT_SUGGESTIONS: string[] = [];',
+        ]);
+        assert.deepEqual(partialAnswers, ['const DEFAULT_SUGGESTIONS:']);
+        assert.strictEqual(completedAnswer?.text, 'const DEFAULT_SUGGESTIONS: string[] = [];');
+      });
     });
   });
 });

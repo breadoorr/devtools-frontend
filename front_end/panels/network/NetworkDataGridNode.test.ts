@@ -6,6 +6,7 @@ import {assert} from 'chai';
 import sinon from 'sinon';
 
 import * as Common from '../../core/common/common.js';
+import * as Host from '../../core/host/host.js';
 import * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
@@ -1066,11 +1067,27 @@ describeWithEnvironment('NetworkLogView', () => {
       const icon = el.querySelector('.network-console-icon');
       assert.isNull(icon);
     });
+
+    it('does not open privileged URLs in a new tab on double-click', () => {
+      const openInNewTabStub = sinon.stub(Host.InspectorFrontendHost.InspectorFrontendHostInstance, 'openInNewTab');
+      const request = createNetworkRequest({
+        url: 'chrome-extension://nnkmpipfcdgmkgepigmhifcgbddoohgk/secret.html',
+        resourceType: Common.ResourceType.resourceTypes.Document,
+      });
+
+      const networkRequestNode = new Network.NetworkDataGridNode.NetworkRequestNode(
+          {} as Network.NetworkDataGridNode.NetworkLogViewInterface, request);
+      const el = document.createElement('div');
+      networkRequestNode.renderCell(el, 'name');
+      el.dispatchEvent(new MouseEvent('dblclick'));
+
+      sinon.assert.notCalled(openInNewTabStub);
+    });
   });
 
   describe('initiator cell', () => {
     it('renders privileged initiator URLs as inert spans rather than clickable links', () => {
-      const request = SDK.NetworkRequest.NetworkRequest.createWithoutBackendRequest(
+      const request = SDK.NetworkRequest.NetworkRequest.createForImportedHar(
           'har-0',
           urlString`https://www.example.com/asset.js`,
           urlString`https://www.example.com/`,
@@ -1080,7 +1097,6 @@ describeWithEnvironment('NetworkLogView', () => {
             lineNumber: 0,
           },
       );
-      request.setIsImportedHar(true);
 
       const networkRequestNode = new Network.NetworkDataGridNode.NetworkRequestNode(
           {} as Network.NetworkDataGridNode.NetworkLogViewInterface, request);

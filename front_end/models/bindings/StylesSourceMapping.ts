@@ -176,6 +176,9 @@ export class StyleFile implements TextUtils.ContentProvider.ContentProvider {
     this.uiSourceCode = this.#project.createUISourceCode(url, header.contentType());
     uiSourceCodeToStyleMap.set(this.uiSourceCode, this);
     NetworkProject.setInitialFrameAttribution(this.uiSourceCode, header.frameId);
+    if (header.hasSourceURL) {
+      NetworkProject.setSourceURLSynthesized(this.uiSourceCode);
+    }
     this.#project.addUISourceCodeWithProvider(this.uiSourceCode, this, metadata, 'text/css');
 
     this.#eventListeners = [
@@ -188,6 +191,9 @@ export class StyleFile implements TextUtils.ContentProvider.ContentProvider {
 
   addHeader(header: SDK.CSSStyleSheetHeader.CSSStyleSheetHeader): void {
     this.headers.add(header);
+    if (header.hasSourceURL) {
+      NetworkProject.setSourceURLSynthesized(this.uiSourceCode);
+    }
     NetworkProject.addFrameAttribution(this.uiSourceCode, header.frameId);
   }
 

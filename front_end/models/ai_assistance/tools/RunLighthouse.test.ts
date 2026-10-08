@@ -5,7 +5,7 @@
 import {assert} from 'chai';
 import sinon from 'sinon';
 
-import {assertIsError, assertIsResult} from '../../../testing/AiAssistanceHelpers.js';
+import {assertIsContext, assertIsError} from '../../../testing/AiAssistanceHelpers.js';
 import type * as LHModel from '../../lighthouse/lighthouse.js';
 import * as AiAssistance from '../ai_assistance.js';
 
@@ -68,14 +68,33 @@ describe('RunLighthouseTool', () => {
 
       const result =
           await tool.handler({explanation: 're-audit', categoryId: 'accessibility', mode: 'snapshot'}, context);
-      assertIsResult(result);
-      assert.include(result.result.audits, '# Audits for Accessibility');
-      assert.include(result.result.audits, 'Low contrast');
-      assert.include(result.result.audits, '- **Low contrast**: 0');
-      assert.deepEqual(result.widgets, [{name: 'LIGHTHOUSE_REPORT', data: {report: mockReport, snapshotReport: true}}]);
+      assertIsContext(result);
+      assert.instanceOf(result.context, AiAssistance.LighthouseContext.LighthouseContext);
+      assert.strictEqual(result.context.getItem(), mockReport);
+      assert.strictEqual(result.description, 'Lighthouse audit completed');
+      assert.isUndefined(result.widgets);
       sinon.assert.calledOnceWithExactly(recordingStub, {
         mode: 'snapshot',
         categoryIds: ['accessibility'],
+        isAIControlled: true,
+      });
+    });
+
+    it('runs audits across all categories when categoryId is "all"', async () => {
+      const recordingStub = sinon.stub().resolves(mockReport);
+      const context: AiAssistance.Tool.BaseToolCapability&AiAssistance.Tool.LighthouseRecordingCapability = {
+        runLighthouse: recordingStub,
+      };
+
+      const result = await tool.handler({explanation: 'full audit', categoryId: 'all', mode: 'navigation'}, context);
+      assertIsContext(result);
+      assert.instanceOf(result.context, AiAssistance.LighthouseContext.LighthouseContext);
+      assert.strictEqual(result.context.getItem(), mockReport);
+      assert.strictEqual(result.description, 'Lighthouse audit completed');
+      assert.isUndefined(result.widgets);
+      sinon.assert.calledOnceWithExactly(recordingStub, {
+        mode: 'navigation',
+        categoryIds: undefined,
         isAIControlled: true,
       });
     });
@@ -87,28 +106,13 @@ describe('RunLighthouseTool', () => {
       };
 
       const result = await tool.handler({explanation: 're-audit', categoryId: 'accessibility'}, context);
-      assertIsResult(result);
-      assert.deepEqual(result.widgets, [{name: 'LIGHTHOUSE_REPORT', data: {report: mockReport, snapshotReport: true}}]);
+      assertIsContext(result);
+      assert.instanceOf(result.context, AiAssistance.LighthouseContext.LighthouseContext);
+      assert.strictEqual(result.context.getItem(), mockReport);
+      assert.strictEqual(result.description, 'Lighthouse audit completed');
+      assert.isUndefined(result.widgets);
       sinon.assert.calledOnceWithExactly(recordingStub, {
         mode: 'snapshot',
-        categoryIds: ['accessibility'],
-        isAIControlled: true,
-      });
-    });
-
-    it('sets snapshotReport to false when running in navigation mode', async () => {
-      const recordingStub = sinon.stub().resolves(mockReport);
-      const context: AiAssistance.Tool.BaseToolCapability&AiAssistance.Tool.LighthouseRecordingCapability = {
-        runLighthouse: recordingStub,
-      };
-
-      const result =
-          await tool.handler({explanation: 're-audit', categoryId: 'accessibility', mode: 'navigation'}, context);
-      assertIsResult(result);
-      assert.deepEqual(result.widgets,
-                       [{name: 'LIGHTHOUSE_REPORT', data: {report: mockReport, snapshotReport: false}}]);
-      sinon.assert.calledOnceWithExactly(recordingStub, {
-        mode: 'navigation',
         categoryIds: ['accessibility'],
         isAIControlled: true,
       });

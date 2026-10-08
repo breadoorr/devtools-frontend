@@ -295,13 +295,24 @@ export class IgnoreListManager extends Common.ObjectWrapper.ObjectWrapper<EventT
   private async updateScriptRanges(script: SDK.Script.Script, sourceMap: SDK.SourceMap.SourceMap|undefined):
       Promise<void> {
     let hasIgnoreListedMappings = false;
+    let artificialRanges: Array<{start: SourceRange, end: SourceRange}> = [];
     if (!this.isUserIgnoreListedURL(script.sourceURL, {isContentScript: script.isContentScript()})) {
       hasIgnoreListedMappings =
           sourceMap?.sourceURLs().some(
               url => this.isUserIgnoreListedURL(url, {isKnownThirdParty: sourceMap.hasIgnoreListHint(url)})) ??
           false;
+      // Artificial functions (compiler helpers without authored code, from encoded source map scopes) are blackboxed
+      // independently of user ignore-listing, so that stepping never stops in them. Same coordinates as the
+      // `findRanges` output below. (Not needed for ignore-listed scripts: V8 checks the blackbox patterns before the
+      // per-script ranges.)
+      if (Root.Runtime.hostConfig.devToolsSourceMapScopesInSourcesPanel?.enabled) {
+        const toSourceRange = ({line, column}: {line: number, column: number}): SourceRange =>
+            ({lineNumber: line, columnNumber: column});
+        const ranges = sourceMap?.artificialFunctionRanges() ?? [];
+        artificialRanges = ranges.map(({start, end}) => ({start: toSourceRange(start), end: toSourceRange(end)}));
+      }
     }
-    if (!hasIgnoreListedMappings) {
+    if (!hasIgnoreListedMappings && artificialRanges.length === 0) {
       if (scriptToRange.get(script) && await script.setBlackboxedRanges([])) {
         scriptToRange.delete(script);
       }
@@ -313,12 +324,13 @@ export class IgnoreListManager extends Common.ObjectWrapper.ObjectWrapper<EventT
       return;
     }
 
+    const userRanges = hasIgnoreListedMappings ?
+        sourceMap.findRanges(
+            srcURL => this.isUserIgnoreListedURL(srcURL, {isKnownThirdParty: sourceMap.hasIgnoreListHint(srcURL)}),
+            {isStartMatching: true}) :
+        [];
     const newRanges =
-        sourceMap
-            .findRanges(
-                srcURL => this.isUserIgnoreListedURL(srcURL, {isKnownThirdParty: sourceMap.hasIgnoreListHint(srcURL)}),
-                {isStartMatching: true})
-            .flatMap(range => [range.start, range.end]);
+        mergeSourceRanges([...userRanges, ...artificialRanges]).flatMap(range => [range.start, range.end]);
 
     const oldRanges = scriptToRange.get(script) || [];
     if (!isEqual(oldRanges, newRanges) && await script.setBlackboxedRanges(newRanges)) {
@@ -650,6 +662,26 @@ export interface SourceRange {
 }
 
 const scriptToRange = new WeakMap<SDK.Script.Script, SourceRange[]>();
+
+/** Sorts `ranges` by start and merges overlapping or touching ranges. Doesn't modify the input. */
+function mergeSourceRanges(ranges: ReadonlyArray<{readonly start: SourceRange, readonly end: SourceRange}>):
+    Array<{start: SourceRange, end: SourceRange}> {
+  const compare = (a: SourceRange, b: SourceRange): number =>
+      (a.lineNumber - b.lineNumber) || (a.columnNumber - b.columnNumber);
+  const sorted = ranges.map(({start, end}) => ({start, end})).sort((a, b) => compare(a.start, b.start));
+  const result: Array<{start: SourceRange, end: SourceRange}> = [];
+  for (const range of sorted) {
+    const last = result.at(-1);
+    if (last && compare(range.start, last.end) <= 0) {
+      if (compare(range.end, last.end) > 0) {
+        last.end = range.end;
+      }
+    } else {
+      result.push(range);
+    }
+  }
+  return result;
+}
 
 export const enum Events {
   IGNORED_SCRIPT_RANGES_UPDATED = 'IGNORED_SCRIPT_RANGES_UPDATED',

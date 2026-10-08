@@ -1567,6 +1567,13 @@ export namespace ProtocolMapping {
       paramsType: [Protocol.CSS.ForceStartingStyleRequest];
       returnType: void;
     };
+    /**
+     * Forces a position-try option for the given node.
+     */
+    'CSS.forcePositionTryOption': {
+      paramsType: [Protocol.CSS.ForcePositionTryOptionRequest];
+      returnType: void;
+    };
     'CSS.getBackgroundColors': {
       paramsType: [Protocol.CSS.GetBackgroundColorsRequest];
       returnType: Protocol.CSS.GetBackgroundColorsResponse;
@@ -3081,6 +3088,37 @@ export namespace ProtocolMapping {
     'FileSystem.getDirectory': {
       paramsType: [Protocol.FileSystem.GetDirectoryRequest];
       returnType: Protocol.FileSystem.GetDirectoryResponse;
+    };
+    /**
+     * Forwards `query` to the find-in-page facility, starting a new find session.
+     * Where exactly the search starts from is implementation-specific.
+     */
+    'FindInPage.findFirst': {
+      paramsType: [Protocol.FindInPage.FindFirstRequest];
+      returnType: void;
+    };
+    /**
+     * Moves to the next match for the query passed to the most recent
+     * findFirst() call.
+     */
+    'FindInPage.findNext': {
+      paramsType: [];
+      returnType: void;
+    };
+    /**
+     * Moves to the previous match for the query passed to the most recent
+     * findFirst() call.
+     */
+    'FindInPage.findPrev': {
+      paramsType: [];
+      returnType: void;
+    };
+    /**
+     * Ends the current find session, if any, and clears its highlighting.
+     */
+    'FindInPage.stop': {
+      paramsType: [];
+      returnType: void;
     };
     /**
      * Sends a BeginFrame to the target and returns when the frame was completed. Optionally captures a

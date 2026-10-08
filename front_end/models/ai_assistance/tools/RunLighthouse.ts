@@ -4,28 +4,34 @@
 
 import * as Host from '../../../core/host/host.js';
 import type * as LHModel from '../../lighthouse/lighthouse.js';
-import {LighthouseFormatter} from '../data_formatters/LighthouseFormatter.js';
+import {LighthouseContext} from '../contexts/LighthouseContext.js';
+import type {LighthouseCategoryArg} from '../data_formatters/LighthouseFormatter.js';
 
 import {
   type BaseToolCapability,
-  type DataHandlerResult,
-  type DataTool,
+  type ContextHandlerResult,
+  type ContextTool,
   type LighthouseRecordingCapability,
+  PermissionPrompt,
   type ToolArgs,
   ToolName,
 } from './Tool.js';
 
 export interface RunLighthouseArgs extends ToolArgs {
   explanation: string;
-  categoryId: LHModel.RunTypes.CategoryId;
+  categoryId: LighthouseCategoryArg;
   mode?: LHModel.RunTypes.RunMode;
 }
 
+/**
+ * Runs Lighthouse audits on the inspected page and sets the resulting report as the active conversation context.
+ */
 export class RunLighthouseTool implements
-    DataTool<RunLighthouseArgs, {audits: string}, BaseToolCapability&LighthouseRecordingCapability> {
+    ContextTool<RunLighthouseArgs, LHModel.ReporterTypes.ReportJSON, BaseToolCapability&LighthouseRecordingCapability> {
   readonly name: ToolName = ToolName.RUN_LIGHTHOUSE;
+  readonly permissionPrompt: PermissionPrompt = PermissionPrompt.NEVER;
   readonly description: string =
-      'Runs Lighthouse audits on the active page. Supports "navigation" (for full initial page load audits), "snapshot" (for inspecting live in-page modifications without reload), and "timespan" (for interactions).';
+      'Runs Lighthouse audits on the active page. Supports "navigation" (for full initial page load audits), "snapshot" (for inspecting live in-page modifications without reload), and "timespan" (for interactions). Use only when the user asks for Lighthouse, a Lighthouse score, or a multi-category audit. For measuring page performance, record a performance trace instead.';
 
   readonly parameters: Host.AidaClient.FunctionObjectParam<keyof RunLighthouseArgs> = {
     type: Host.AidaClient.ParametersTypes.OBJECT,
@@ -39,7 +45,9 @@ export class RunLighthouseTool implements
       },
       categoryId: {
         type: Host.AidaClient.ParametersTypes.STRING,
-        description: 'Lighthouse category. E.g. "accessibility", "performance".',
+        // The experimental 'agentic-browsing' category is intentionally omitted from the prompt description so the agent does not invoke it unprompted. It is also excluded when 'all' is provided.
+        description:
+            'Lighthouse category. Use "all" to run all categories, or specify a category: "accessibility", "performance", "best-practices", "seo".',
         nullable: false,
       },
       mode: {
@@ -61,23 +69,23 @@ export class RunLighthouseTool implements
   }
 
   async handler(params: RunLighthouseArgs, context: BaseToolCapability&LighthouseRecordingCapability):
-      Promise<DataHandlerResult<{audits: string}>> {
+      Promise<ContextHandlerResult<LHModel.ReporterTypes.ReportJSON>> {
     const mode = params.mode ?? 'snapshot';
     try {
+      // Passing undefined for categoryIds instructs the Lighthouse runner to audit all categories supported by the mode when isAIControlled is true.
       const report = await context.runLighthouse({
         mode,
-        categoryIds: [params.categoryId],
+        categoryIds: params.categoryId === 'all' ? undefined : [params.categoryId],
         isAIControlled: true,
       });
       if (!report) {
         return {error: 'Error: Failed to record new audits.'};
       }
 
-      const audits = new LighthouseFormatter().audits(report, params.categoryId);
-      const isSnapshot = mode === 'snapshot';
       return {
-        result: {audits},
-        widgets: [{name: 'LIGHTHOUSE_REPORT', data: {report, snapshotReport: isSnapshot}}],
+        // No widgets are returned here; LighthouseContext.getWidgets() provides the report widget.
+        context: new LighthouseContext(report),
+        description: 'Lighthouse audit completed',
       };
     } catch (err) {
       return {error: `Error: Failed to record new audits: ${err instanceof Error ? err.message : String(err)}`};

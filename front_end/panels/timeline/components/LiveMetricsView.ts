@@ -5,7 +5,6 @@
 import '../../../ui/components/settings/settings.js';
 import '../../../ui/kit/kit.js';
 import './FieldSettingsDialog.js';
-import './MetricCard.js';
 
 import * as Common from '../../../core/common/common.js';
 import * as i18n from '../../../core/i18n/i18n.js';
@@ -28,7 +27,7 @@ import * as MobileThrottling from '../../mobile_throttling/mobile_throttling.js'
 
 import * as Insights from './insights/insights.js';
 import liveMetricsViewStyles from './liveMetricsView.css.js';
-import type {MetricCardData} from './MetricCard.js';
+import {MetricCard} from './MetricCard.js';
 import metricValueStyles from './metricValueStyles.css.js';
 import {CLS_THRESHOLDS, INP_THRESHOLDS, renderMetricValue} from './Utils.js';
 
@@ -477,18 +476,6 @@ function getCollectionPeriodRange(cruxManager: CrUXManager.CrUXManager): string|
   });
 }
 
-function createMetricCardRef(cardData: Omit<MetricCardData, 'tooltipContainer'>):
-    ReturnType<typeof Lit.Directives.ref> {
-  return Lit.Directives.ref(el => {
-    if (el instanceof HTMLElement) {
-      (el as HTMLElement & {data: MetricCardData}).data = {
-        ...cardData,
-        tooltipContainer: (el.closest('.metric-cards') as HTMLElement) || undefined,
-      };
-    }
-  });
-}
-
 function renderLcpCard(input: ViewInput): Lit.LitTemplate {
   const fieldData = input.cruxManager.getSelectedFieldMetricData('largest_contentful_paint');
   const nodeLink =
@@ -499,7 +486,7 @@ function renderLcpCard(input: ViewInput): Lit.LitTemplate {
 
   // clang-format off
   return html`
-    <devtools-metric-card ${createMetricCardRef({
+    <devtools-widget ${widget(MetricCard, {
       metric: 'LCP',
       localValue: input.lcpValue?.value,
       fieldValue: fieldData?.percentiles?.p75,
@@ -521,7 +508,7 @@ function renderLcpCard(input: ViewInput): Lit.LitTemplate {
           </div>
         `
         : nothing}
-    </devtools-metric-card>
+    </devtools-widget>
   `;
   // clang-format on
 }
@@ -535,7 +522,7 @@ function renderClsCard(input: ViewInput): Lit.LitTemplate {
 
   // clang-format off
   return html`
-    <devtools-metric-card ${createMetricCardRef({
+    <devtools-widget ${widget(MetricCard, {
       metric: 'CLS',
       localValue: input.clsValue?.value,
       fieldValue: fieldData?.percentiles?.p75,
@@ -553,7 +540,7 @@ function renderClsCard(input: ViewInput): Lit.LitTemplate {
           >${i18nString(UIStrings.numShifts, {shiftCount: clusterIds.size})}</button>
         </div>
       ` : nothing}
-    </devtools-metric-card>
+    </devtools-widget>
   `;
   // clang-format on
 }
@@ -565,7 +552,7 @@ function renderInpCard(input: ViewInput): Lit.LitTemplate {
 
   // clang-format off
   return html`
-    <devtools-metric-card ${createMetricCardRef({
+    <devtools-widget ${widget(MetricCard, {
       metric: 'INP',
       localValue: input.inpValue?.value,
       fieldValue: fieldData?.percentiles?.p75,
@@ -588,7 +575,7 @@ function renderInpCard(input: ViewInput): Lit.LitTemplate {
           >${interaction.interactionType}</button>
         </div>
       ` : nothing}
-    </devtools-metric-card>
+    </devtools-widget>
   `;
   // clang-format on
 }

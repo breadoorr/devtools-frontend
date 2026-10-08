@@ -13,7 +13,12 @@ import type * as Trace from '../../trace/trace.js';
 import type * as Workspace from '../../workspace/workspace.js';
 import {debugLog, isStructuredLogEnabled} from '../debug.js';
 import {dispatchAiAssistanceDoneEvent} from '../DOMHelpers.js';
-import type {ContextHandlerResult, DataHandlerResult} from '../tools/Tool.js';
+import {
+  type ContextHandlerResult,
+  type DataHandlerResult,
+  PermissionDecision,
+  type PermissionPrompt,
+} from '../tools/Tool.js';
 
 type UrlString = Platform.DevToolsPath.UrlString;
 const MAX_SUGGESTION_LENGTH = 200;
@@ -100,7 +105,9 @@ export interface SideEffectResponse {
   type: ResponseType.SIDE_EFFECT;
   description: string|null;
   code?: string;
-  confirm: (confirm: boolean) => void;
+  confirm: (decision: PermissionDecision) => void;
+  permissionPrompt?: PermissionPrompt;
+  permissionTitle?: string;
 }
 export interface ContextChangeResponse {
   type: ResponseType.CONTEXT_CHANGE;
@@ -182,7 +189,7 @@ export interface ParsedAnswer {
 
 export type ParsedResponse = ParsedAnswer;
 
-export const MAX_STEPS = 10;
+export const MAX_STEPS = 20;
 
 export interface ConversationSuggestion {
   title: string;
@@ -477,6 +484,15 @@ export interface FunctionDeclaration<Args extends Record<string, unknown>, Retur
     title?: string, thought?: string, action?: string, suggestions?: [string, ...string[]],
   };
   /**
+   * Choices the permission prompt offers when the handler returns
+   * `requiresApproval`. Behaves as `ALLOW_ONCE` when unset.
+   */
+  permissionPrompt?: PermissionPrompt;
+  /**
+   * Title of the permission prompt, e.g. "Allow reading cookie values?".
+   */
+  permissionTitle?: string;
+  /**
    * Function implementation that the LLM will try to execute,
    */
   handler(args: Args, options?: FunctionHandlerOptions): Promise<ToolResult<ReturnType>>;
@@ -503,8 +519,6 @@ class CrossOriginError extends Error {
  *
  * TODO: missing a test that action code is yielded before the
  * confirmation dialog.
- * TODO: missing a test for an error if it took
- * more than MAX_STEPS iterations.
  */
 export abstract class AiAgent<T> {
   /**
@@ -755,6 +769,21 @@ export abstract class AiAgent<T> {
     return this.parseTextResponseForSuggestions(response.trim());
   }
 
+  /**
+   * Parses the text of a response that is still streaming. Only the `answer`
+   * of the result is shown, as a partial answer. By default, partial answers
+   * use the same parsing as completed answers.
+   *
+   * This hook exists so that `AiAgent2` (AI V2) can parse follow-up
+   * suggestions differently without changing the V1 agents. Remove it once
+   * AI V2 ships and the V1 agents are removed. b/568697679 explores getting
+   * suggestions from a function call instead of parsing them from text,
+   * which would remove the need for this parsing.
+   */
+  protected parsePartialTextResponse(response: string): ParsedResponse {
+    return this.parseTextResponse(response);
+  }
+
   protected async finalizeAnswer(answer: AnswerResponse): Promise<AnswerResponse> {
     return answer;
   }
@@ -846,7 +875,7 @@ export abstract class AiAgent<T> {
           functionCall = fetchResult.functionCall;
 
           if (!functionCall && !fetchResult.completed) {
-            const parsed = this.parseTextResponse(textResponse);
+            const parsed = this.parsePartialTextResponse(textResponse);
             const partialAnswer = 'answer' in parsed ? parsed.answer : '';
             if (!partialAnswer) {
               continue;
@@ -923,6 +952,18 @@ export abstract class AiAgent<T> {
           }
 
           if ('context' in result) {
+            // Pair the functionCall with a functionResponse so history stays valid
+            // if this agent instance is re-run after the context change (AiAgent2).
+            // The new context reaches the model through the next USER query.
+            this.#history.push({
+              parts: [{
+                functionResponse: {
+                  name: functionCall.name,
+                  response: {result: result.description},
+                },
+              }],
+              role: Host.AidaClient.Role.ROLE_UNSPECIFIED,
+            });
             yield {
               type: ResponseType.CONTEXT_CHANGE,
               description: result.description,
@@ -940,6 +981,17 @@ export abstract class AiAgent<T> {
               response: {...result, widgets: undefined},
             },
           };
+          if (i === MAX_STEPS - 1) {
+            // Normally, the functionResponse is pushed at the start of the next
+            // iteration. Since no further iteration will run, push it here so the
+            // last functionCall is not left unpaired in history.
+            this.#history.push({
+              parts: [query],
+              role: Host.AidaClient.Role.ROLE_UNSPECIFIED,
+            });
+            yield this.#createErrorResponse(ErrorType.MAX_STEPS);
+            break;
+          }
           request = this.buildRequest(query, Host.AidaClient.Role.ROLE_UNSPECIFIED);
         } catch (err) {
           if (err instanceof CrossOriginError) {
@@ -951,7 +1003,7 @@ export abstract class AiAgent<T> {
           break;
         }
       } else {
-        yield this.#createErrorResponse(i - 1 === MAX_STEPS ? ErrorType.MAX_STEPS : ErrorType.UNKNOWN);
+        yield this.#createErrorResponse(ErrorType.UNKNOWN);
         break;
       }
     }
@@ -1037,21 +1089,21 @@ export abstract class AiAgent<T> {
         };
       }
 
-      const sideEffectConfirmationPromiseWithResolvers = this.confirmSideEffect<boolean>();
+      const sideEffectConfirmationPromiseWithResolvers = this.confirmSideEffect<PermissionDecision>();
 
-      void sideEffectConfirmationPromiseWithResolvers.promise.then(result => {
+      void sideEffectConfirmationPromiseWithResolvers.promise.then(decision => {
         Host.userMetrics.actionTaken(
-            result ? Host.UserMetrics.Action.AiAssistanceSideEffectConfirmed :
-                     Host.UserMetrics.Action.AiAssistanceSideEffectRejected,
+            decision === PermissionDecision.REJECT ? Host.UserMetrics.Action.AiAssistanceSideEffectRejected :
+                                                     Host.UserMetrics.Action.AiAssistanceSideEffectConfirmed,
         );
       });
 
       if (options?.signal?.aborted) {
-        sideEffectConfirmationPromiseWithResolvers.resolve(false);
+        sideEffectConfirmationPromiseWithResolvers.resolve(PermissionDecision.REJECT);
       }
 
       const onAbort = (): void => {
-        sideEffectConfirmationPromiseWithResolvers.resolve(false);
+        sideEffectConfirmationPromiseWithResolvers.resolve(PermissionDecision.REJECT);
       };
 
       options?.signal?.addEventListener('abort', onAbort, {once: true});
@@ -1060,15 +1112,17 @@ export abstract class AiAgent<T> {
         type: ResponseType.SIDE_EFFECT,
         confirm: sideEffectConfirmationPromiseWithResolvers.resolve,
         description: result.description,
+        permissionPrompt: call.permissionPrompt,
+        permissionTitle: call.permissionTitle,
       };
 
-      let approvedRun = false;
+      let decision = PermissionDecision.REJECT;
       try {
-        approvedRun = await sideEffectConfirmationPromiseWithResolvers.promise;
+        decision = await sideEffectConfirmationPromiseWithResolvers.promise;
       } finally {
         options?.signal?.removeEventListener('abort', onAbort);
       }
-      if (!approvedRun) {
+      if (decision === PermissionDecision.REJECT) {
         yield {
           type: ResponseType.ACTION,
           code,
@@ -1180,8 +1234,11 @@ export abstract class AiAgent<T> {
   }
 
   #createErrorResponse(error: ErrorType): ResponseData {
-    this.#removeLastRunParts();
-    this.clearCache();
+    // If we hit MAX_STEPS, we still want to keep the call history as this may be relevant for follow-up requests.
+    if (error !== ErrorType.MAX_STEPS) {
+      this.#removeLastRunParts();
+      this.clearCache();
+    }
     if (error !== ErrorType.ABORT) {
       Host.userMetrics.actionTaken(Host.UserMetrics.Action.AiAssistanceError);
     }
@@ -1193,7 +1250,13 @@ export abstract class AiAgent<T> {
   }
 }
 
-function sanitizeSuggestions(suggestions: string): [string, ...string[]]|undefined {
+/**
+ * Parses `suggestions` as a JSON array and returns its non-empty string items,
+ * with whitespace collapsed and each item truncated to `MAX_SUGGESTION_LENGTH`.
+ * Returns `undefined` if the value is not an array or no items remain.
+ * Throws if `suggestions` is not valid JSON.
+ */
+export function sanitizeSuggestions(suggestions: string): [string, ...string[]]|undefined {
   const parsed = JSON.parse(suggestions);
   if (!Array.isArray(parsed)) {
     return undefined;

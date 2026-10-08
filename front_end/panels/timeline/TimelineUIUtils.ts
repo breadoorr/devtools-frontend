@@ -361,7 +361,7 @@ const UIStrings = {
    * @description Reason why an animation wasn't composited because a transform-related property cannot be accelerated on the target.
    */
   compositingFailedTransformRelatedPropertyCannotBeAcceleratedOnTarget:
-      'Transform-related property cannot be accelerated on target',
+      'Transform-related property can’t be accelerated on target',
   /**
    * @description Reason why an animation wasn't composited because a transform-related property depends on box size.
    */
@@ -526,7 +526,9 @@ const {SamplesIntegrator} = Trace.Helpers.SamplesIntegrator;
 
 export class TimelineUIUtils {
   static getGetDebugModeEnabled(): boolean {
-    return Common.Settings.Settings.instance().moduleSetting('timeline-debug-mode').get() as boolean;
+    return Common.Settings.Settings.instance()
+        .resolve(SettingUIRegistration.TimelineSettings.timelineDebugModeSettingDescriptor)
+        .get();
   }
   static frameDisplayName(frame: Protocol.Runtime.CallFrame): string {
     const maybeResolvedData = SourceMapsResolver.SourceMapsResolver.resolvedCodeLocationForCallFrame(frame);
@@ -1303,8 +1305,8 @@ export class TimelineUIUtils {
       case Trace.Types.Events.Name.RECALC_STYLE: {
         contentHelper.appendTextRow(i18nString(UIStrings.elementsAffected), unsafeEventArgs['elementCount']);
 
-        const selectorStatsSetting =
-            Common.Settings.Settings.instance().moduleSetting('timeline-capture-selector-stats');
+        const selectorStatsSetting = Common.Settings.Settings.instance().resolve(
+            SettingUIRegistration.TimelineSettings.timelineCaptureSelectorStatsSettingDescriptor);
         if (!selectorStatsSetting.get()) {
           const note = document.createElement('span');
           note.textContent = i18nString(UIStrings.sSelectorStatsInfo, {

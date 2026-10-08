@@ -5,6 +5,7 @@
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as SettingsUI from '../../ui/settings/settings.js';
 
 const UIStrings = {
   /**
@@ -172,20 +173,12 @@ UI.ActionRegistration.registerActionExtension({
   ],
 });
 
-Common.Settings.registerSettingExtension({
+SettingsUI.SettingUIRegistration.register(SettingsUI.LayerViewerSettings.showPaintsSettingDescriptor, {
   category: Common.Settings.SettingCategory.NONE,
-  storageType: Common.Settings.SettingStorageType.GLOBAL,
   title: i18nLazyString(UIStrings.paints),
-  settingName: 'frame-viewer-show-paints',
-  settingType: Common.Settings.SettingType.BOOLEAN,
-  defaultValue: false,
 });
 
-Common.Settings.registerSettingExtension({
+SettingsUI.SettingUIRegistration.register(SettingsUI.LayerViewerSettings.showSlowScrollRectsSettingDescriptor, {
   category: Common.Settings.SettingCategory.NONE,
-  storageType: Common.Settings.SettingStorageType.GLOBAL,
   title: i18nLazyString(UIStrings.slowScrollRects),
-  settingName: 'frame-viewer-show-slow-scroll-rects',
-  settingType: Common.Settings.SettingType.BOOLEAN,
-  defaultValue: true,
 });

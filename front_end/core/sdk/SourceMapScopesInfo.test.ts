@@ -44,6 +44,14 @@ function stubScopeChain(callFrame: sinon.SinonStubbedInstance<SDK.DebuggerModel.
   callFrame.scopeChain.returns(payloads.map((_, ordinal) => new SDK.DebuggerModel.Scope(callFrame, ordinal)));
 }
 
+/** Like {@link stringifyFrame}, but renders frames at unmapped generated positions as `url:unmapped`. */
+function stringifyTranslatedFrame(frame: SDK.SourceMapScopesInfo.TranslatedFrame): string {
+  if (frame.line === undefined || frame.column === undefined) {
+    return `at ${frame.name ?? '<anonymous>'} (${frame.url}:unmapped)`;
+  }
+  return stringifyFrame({...frame, line: frame.line, column: frame.column});
+}
+
 describe('SourceMapScopesInfo', () => {
   setupLocaleHooks();
   setupSettingsHooks();
@@ -55,14 +63,7 @@ describe('SourceMapScopesInfo', () => {
     universe = new TestUniverse();
   });
 
-  describe('translateCallSite', () => {
-    it('throws for an outlined frame', () => {
-      const builder = new ScopeInfoBuilder().startRange(0, 0, {isStackFrame: true, isHidden: true}).endRange(0, 10);
-      const info = new SourceMapScopesInfo(sinon.createStubInstance(SDK.SourceMap.SourceMap), builder.build());
-
-      assert.throws(() => info.translateCallSite(0, 5));
-    });
-
+  describe('translateRawFrame', () => {
     it('does nothing for frames that don\'t contain inlined code', () => {
       //
       //    orig. code                         gen. code
@@ -89,14 +90,16 @@ describe('SourceMapScopesInfo', () => {
                                                     new Common.Console.Console());
 
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 14, {kind: 'function', key: 'inner', name: 'inner', isStackFrame: true})
           .endScope(2, 1)
           .startScope(4, 14, {kind: 'function', key: 'outer', name: 'outer', isStackFrame: true})
           .startScope(5, 12, {kind: 'block', key: 'block'})
           .endScope(7, 3)
           .endScope(8, 1)
-          .endScope(11, 0);
+          .endScope(11, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 10, {scopeKey: 'inner', isStackFrame: true})
@@ -110,24 +113,24 @@ describe('SourceMapScopesInfo', () => {
       const info = new SourceMapScopesInfo(sourceMap, builder.build());
 
       {
-        const translatedFrames = info.translateCallSite(0, 18);  // Pause on 'print'.
+        const translatedFrames = info.translateRawFrame(0, 18).frames;  // Pause on 'print'.
 
         assert.lengthOf(translatedFrames, 1);
-        assert.strictEqual(stringifyFrame(translatedFrames[0]), 'at inner (index.ts:1:7)');
+        assert.strictEqual(stringifyTranslatedFrame(translatedFrames[0]), 'at inner (index.ts:1:7)');
       }
 
       {
-        const translatedFrames = info.translateCallSite(1, 23);  // Pause on 'n()'.
+        const translatedFrames = info.translateRawFrame(1, 23).frames;  // Pause on 'n()'.
 
         assert.lengthOf(translatedFrames, 1);
-        assert.strictEqual(stringifyFrame(translatedFrames[0]), 'at outer (index.ts:6:9)');
+        assert.strictEqual(stringifyTranslatedFrame(translatedFrames[0]), 'at outer (index.ts:6:9)');
       }
 
       {
-        const translatedFrames = info.translateCallSite(2, 1);  // Pause on 'm()'.
+        const translatedFrames = info.translateRawFrame(2, 1).frames;  // Pause on 'm()'.
 
         assert.lengthOf(translatedFrames, 1);
-        assert.strictEqual(stringifyFrame(translatedFrames[0]), 'at <anonymous> (index.ts:10:5)');
+        assert.strictEqual(stringifyTranslatedFrame(translatedFrames[0]), 'at <anonymous> (index.ts:10:5)');
       }
     });
 
@@ -157,14 +160,16 @@ describe('SourceMapScopesInfo', () => {
                                                     new Common.Console.Console());
 
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 14, {kind: 'function', name: 'inner', key: 'inner', isStackFrame: true})
           .endScope(2, 1)
           .startScope(4, 14, {kind: 'function', name: 'outer', key: 'outer', isStackFrame: true})
           .startScope(5, 12, {kind: 'block', key: 'block'})
           .endScope(7, 3)
           .endScope(8, 1)
-          .endScope(11, 0);
+          .endScope(11, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 10, {scopeKey: 'outer', isStackFrame: true})
@@ -178,24 +183,25 @@ describe('SourceMapScopesInfo', () => {
       const info = new SourceMapScopesInfo(sourceMap, builder.build());
 
       {
-        const translatedFrames = info.translateCallSite(0, 26);  // Pause on 'print'.
+        const translatedFrames = info.translateRawFrame(0, 26).frames;  // Pause on 'print'.
 
         assert.lengthOf(translatedFrames, 2);
-        assert.deepEqual(translatedFrames.map(stringifyFrame), ['at inner (index.ts:1:7)', 'at outer (index.ts:6:8)']);
+        assert.deepEqual(translatedFrames.map(stringifyTranslatedFrame),
+                         ['at inner (index.ts:1:7)', 'at outer (index.ts:6:8)']);
       }
 
       {
-        const translatedFrames = info.translateCallSite(0, 14);  // Pause on 'if'.
+        const translatedFrames = info.translateRawFrame(0, 14).frames;  // Pause on 'if'.
 
         assert.lengthOf(translatedFrames, 1);
-        assert.strictEqual(stringifyFrame(translatedFrames[0]), 'at outer (index.ts:5:5)');
+        assert.strictEqual(stringifyTranslatedFrame(translatedFrames[0]), 'at outer (index.ts:5:5)');
       }
 
       {
-        const translatedFrames = info.translateCallSite(1, 1);  // Pause on 'm'.
+        const translatedFrames = info.translateRawFrame(1, 1).frames;  // Pause on 'm'.
 
         assert.lengthOf(translatedFrames, 1);
-        assert.strictEqual(stringifyFrame(translatedFrames[0]), 'at <anonymous> (index.ts:10:5)');
+        assert.strictEqual(stringifyTranslatedFrame(translatedFrames[0]), 'at <anonymous> (index.ts:10:5)');
       }
     });
 
@@ -223,14 +229,16 @@ describe('SourceMapScopesInfo', () => {
                                                     new Common.Console.Console());
 
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(0, 14, {kind: 'function', name: 'inner', key: 'inner', isStackFrame: true})
           .endScope(2, 1)
           .startScope(4, 14, {kind: 'function', name: 'outer', key: 'outer', isStackFrame: true})
           .startScope(5, 12, {kind: 'block', key: 'block'})
           .endScope(7, 3)
           .endScope(8, 1)
-          .endScope(11, 0);
+          .endScope(11, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 0, {scopeKey: 'outer', callSite: {sourceIndex: 0, line: 10, column: 5}})
@@ -244,24 +252,358 @@ describe('SourceMapScopesInfo', () => {
       const info = new SourceMapScopesInfo(sourceMap, builder.build());
 
       {
-        const translatedFrames = info.translateCallSite(0, 5);  // Pause on 'print'.
+        const translatedFrames = info.translateRawFrame(0, 5).frames;  // Pause on 'print'.
 
-        assert.deepEqual(translatedFrames.map(stringifyFrame), [
+        assert.deepEqual(translatedFrames.map(stringifyTranslatedFrame), [
           'at inner (index.ts:1:7)',
           'at outer (index.ts:6:9)',
           'at <anonymous> (index.ts:10:5)',
         ]);
       }
     });
+
+    function stringify(translation: SDK.SourceMapScopesInfo.RawFrameTranslation):
+        {kind: SDK.SourceMapScopesInfo.GeneratedFrameKind, frames: string[]} {
+      return {kind: translation.kind, frames: translation.frames.map(stringifyTranslatedFrame)};
+    }
+
+    //
+    //    orig. code                         gen. code
+    //             10        20                       10        20
+    //    012345678901234567890              012345678901234567890123456
+    //
+    // 0: function outer() {                 function outer(){_loop();}
+    // 1:   {                                function _loop(){log(x)}
+    // 2:     log(x);                        function _helper(){}
+    // 3:   }                                function _hidden(){}
+    // 4: }
+    //
+    // `_loop` is the outlined block scope, `_helper` has no definition, and `_hidden`
+    // is marked hidden but has no definition either.
+    function createOutliningScopesInfo(): SDK.SourceMapScopesInfo.SourceMapScopesInfo {
+      const sourceMap = new SDK.SourceMap.SourceMap(urlString`index.js`, urlString`index.js.map`, encodeSourceMap([
+                                                      '0:17 => index.ts:1:2',
+                                                      '1:17 => index.ts:2:4',
+                                                      '2:18 => index.ts:4:0',
+                                                      '3:18 => index.ts:4:0',
+                                                    ]),
+                                                    new Common.Console.Console());
+
+      const builder = new ScopeInfoBuilder();
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
+          .startScope(0, 14, {kind: 'function', key: 'outer', name: 'outer', isStackFrame: true})
+          .startScope(1, 2, {kind: 'block', key: 'block'})
+          .endScope(3, 3)
+          .endScope(4, 1)
+          .endScope(5, 0)
+          .endSource();
+
+      builder.startRange(0, 0, {scopeKey: 'global'})
+          .startRange(0, 14, {scopeKey: 'outer', isStackFrame: true})
+          .endRange(0, 26)
+          .startRange(1, 14, {scopeKey: 'block', isStackFrame: true, isHidden: true})
+          .endRange(1, 24)
+          .startRange(2, 16, {isStackFrame: true})
+          .endRange(2, 20)
+          .startRange(3, 16, {isStackFrame: true, isHidden: true})
+          .endRange(3, 20)
+          .endRange(4, 0);
+
+      return new SourceMapScopesInfo(sourceMap, builder.build());
+    }
+
+    it('translates a regular function as VISIBLE', () => {
+      const info = createOutliningScopesInfo();
+
+      assert.deepEqual(stringify(info.translateRawFrame(0, 17)), {
+        kind: SDK.SourceMapScopesInfo.GeneratedFrameKind.VISIBLE,
+        frames: ['at outer (index.ts:1:2)'],
+      });
+    });
+
+    it('translates a hidden function with a definition as OUTLINED using the authored function name', () => {
+      const info = createOutliningScopesInfo();
+
+      assert.deepEqual(stringify(info.translateRawFrame(1, 17)), {
+        kind: SDK.SourceMapScopesInfo.GeneratedFrameKind.OUTLINED,
+        frames: ['at outer (index.ts:2:4)'],
+      });
+    });
+
+    it('translates a function without a definition as HIDDEN without frames, even if it\'s not marked hidden', () => {
+      const info = createOutliningScopesInfo();
+
+      assert.deepEqual(stringify(info.translateRawFrame(2, 18)), {
+        kind: SDK.SourceMapScopesInfo.GeneratedFrameKind.HIDDEN,
+        frames: [],
+      });
+    });
+
+    it('translates a function marked hidden without a definition as HIDDEN without frames', () => {
+      const info = createOutliningScopesInfo();
+
+      assert.deepEqual(stringify(info.translateRawFrame(3, 18)), {
+        kind: SDK.SourceMapScopesInfo.GeneratedFrameKind.HIDDEN,
+        frames: [],
+      });
+    });
+
+    it('classifies a position by its inner-most generated function', () => {
+      const scopeInfo = new SourceMapScopesInfo(sinon.createStubInstance(SDK.SourceMap.SourceMap),
+                                                new ScopeInfoBuilder()
+                                                    .startSource()
+                                                    .startScope(0, 0, {isStackFrame: true, key: 'fn'})
+                                                    .endScope(10, 0)
+                                                    .endSource()
+                                                    .startRange(0, 0)
+                                                    .startRange(0, 10, {isStackFrame: true, isHidden: true})
+                                                    .startRange(0, 20, {isStackFrame: true, scopeKey: 'fn'})
+                                                    .endRange(0, 30)
+                                                    .endRange(0, 40)
+                                                    .endRange(0, 50)
+                                                    .build());
+
+      assert.strictEqual(scopeInfo.translateRawFrame(0, 25).kind, SDK.SourceMapScopesInfo.GeneratedFrameKind.VISIBLE);
+      assert.strictEqual(scopeInfo.translateRawFrame(0, 35).kind, SDK.SourceMapScopesInfo.GeneratedFrameKind.HIDDEN);
+    });
+
+    //
+    //    orig. code                         gen. code
+    //             10        20                       10        20
+    //    012345678901234567890              012345678901234567890123456
+    //
+    // 0: function inner() {                 function outer(){_loop();}
+    // 1:   log();                           function _loop(){log()}
+    // 2: }
+    // 3: function outer() {
+    // 4:   {
+    // 5:     inner();
+    // 6:   }
+    // 7: }
+    //
+    // The block in `outer` is outlined into `_loop` and `inner` is inlined into `_loop`.
+    function createInlinedIntoOutlinedScopesInfo(mappings: string[]): SDK.SourceMapScopesInfo.SourceMapScopesInfo {
+      const sourceMap = new SDK.SourceMap.SourceMap(urlString`index.js`, urlString`index.js.map`,
+                                                    encodeSourceMap(mappings), new Common.Console.Console());
+
+      const builder = new ScopeInfoBuilder();
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
+          .startScope(0, 14, {kind: 'function', key: 'inner', name: 'inner', isStackFrame: true})
+          .endScope(2, 1)
+          .startScope(3, 14, {kind: 'function', key: 'outer', name: 'outer', isStackFrame: true})
+          .startScope(4, 2, {kind: 'block', key: 'block'})
+          .endScope(6, 3)
+          .endScope(7, 1)
+          .endScope(8, 0)
+          .endSource();
+
+      builder.startRange(0, 0, {scopeKey: 'global'})
+          .startRange(0, 14, {scopeKey: 'outer', isStackFrame: true})
+          .endRange(0, 26)
+          .startRange(1, 14, {scopeKey: 'block', isStackFrame: true, isHidden: true})
+          .startRange(1, 17, {scopeKey: 'inner', callSite: {sourceIndex: 0, line: 5, column: 4}})
+          .endRange(1, 22)
+          .endRange(1, 23)
+          .endRange(2, 0);
+
+      return new SourceMapScopesInfo(sourceMap, builder.build());
+    }
+
+    it('expands inlined functions inside an OUTLINED function', () => {
+      const info = createInlinedIntoOutlinedScopesInfo(['0:17 => index.ts:4:2', '1:17 => index.ts:1:2']);
+
+      assert.deepEqual(stringify(info.translateRawFrame(1, 17)), {
+        kind: SDK.SourceMapScopesInfo.GeneratedFrameKind.OUTLINED,
+        frames: ['at inner (index.ts:1:2)', 'at outer (index.ts:5:4)'],
+      });
+    });
+
+    it('identifies the authored function of an unmapped position via the generated ranges', () => {
+      const info = createInlinedIntoOutlinedScopesInfo(['0:17 => index.ts:4:2', '1:14']);
+
+      const translation = info.translateRawFrame(1, 17);
+
+      assert.deepEqual(stringify(translation), {
+        kind: SDK.SourceMapScopesInfo.GeneratedFrameKind.OUTLINED,
+        frames: ['at inner (index.ts:unmapped)', 'at outer (index.ts:5:4)'],
+      });
+      assert.deepEqual(translation.frames[0].functionStart, {line: 0, column: 14});
+    });
+
+    it('identifies the file of unmapped top-level code via the generated ranges', () => {
+      // `index.ts` is only known through the first mapping. The position under test is covered by the second one.
+      const sourceMap =
+          new SDK.SourceMap.SourceMap(urlString`index.js`, urlString`index.js.map`,
+                                      encodeSourceMap(['0:0 => index.ts:0:0', '0:5']), new Common.Console.Console());
+      const builder = new ScopeInfoBuilder();
+      builder.startSource().startScope(0, 0, {kind: 'global', key: 'global'}).endScope(1, 0).endSource();
+      builder.startRange(0, 0, {scopeKey: 'global'}).endRange(1, 0);
+      const info = new SourceMapScopesInfo(sourceMap, builder.build());
+
+      const {kind, frames} = info.translateRawFrame(0, 7);
+
+      assert.strictEqual(kind, SDK.SourceMapScopesInfo.GeneratedFrameKind.VISIBLE);
+      assert.deepEqual(frames, [{name: undefined, url: urlString`index.ts`, functionStart: undefined}]);
+    });
+
+    it('returns no frames for an unmapped position without an original scope', () => {
+      const scopeInfo = new SourceMapScopesInfo(sinon.createStubInstance(SDK.SourceMap.SourceMap),
+                                                new ScopeInfoBuilder()
+                                                    .startSource()
+                                                    .startScope(0, 0, {isStackFrame: true, key: 'fn'})
+                                                    .endScope(10, 0)
+                                                    .endSource()
+                                                    .startRange(0, 0)
+                                                    .startRange(0, 20, {isStackFrame: true, scopeKey: 'fn'})
+                                                    .endRange(0, 30)
+                                                    .endRange(0, 50)
+                                                    .build());
+
+      // Inside `fn` the function is known, outside of it nothing is.
+      assert.deepEqual(scopeInfo.translateRawFrame(0, 25).frames,
+                       [{name: '', url: undefined, functionStart: {line: 0, column: 0}}]);
+      assert.deepEqual(scopeInfo.translateRawFrame(0, 5).frames, []);
+    });
+
+    it('returns the start of the original function for the top frame and each inlined caller', () => {
+      const info = createInlinedIntoOutlinedScopesInfo(['0:17 => index.ts:4:2', '1:17 => index.ts:1:2']);
+
+      const {frames} = info.translateRawFrame(1, 17);
+
+      assert.deepEqual(frames.map(f => f.functionStart), [{line: 0, column: 14}, {line: 3, column: 14}]);
+      assert.deepEqual(info.translateRawFrame(0, 17).frames[0]?.functionStart, {line: 3, column: 14});
+    });
+
+    it('returns no function start for top-level code', () => {
+      const sourceMap =
+          new SDK.SourceMap.SourceMap(urlString`index.js`, urlString`index.js.map`,
+                                      encodeSourceMap(['0:0 => index.ts:0:0']), new Common.Console.Console());
+      const builder = new ScopeInfoBuilder();
+      builder.startSource().startScope(0, 0, {kind: 'global', key: 'global'}).endScope(1, 0).endSource();
+      builder.startRange(0, 0, {scopeKey: 'global'}).endRange(1, 0);
+      const info = new SourceMapScopesInfo(sourceMap, builder.build());
+
+      const {kind, frames: [frame]} = info.translateRawFrame(0, 0);
+
+      assert.strictEqual(kind, SDK.SourceMapScopesInfo.GeneratedFrameKind.VISIBLE);
+      assert.exists(frame);
+      assert.isUndefined(frame.name);
+      assert.isUndefined(frame.functionStart);
+    });
+  });
+
+  describe('stepping queries', () => {
+    //  0: function F(){         F, with inlined callees:
+    //  1:   ...                   I (1:0-3:0), which itself inlines J (2:0-2:5)
+    //  4:   ...                   K (4:0-4:5)
+    //  5:   function n(){...}     nested function n (5:2-5:16), with an inlined callee (5:5-5:8)
+    //  6: }
+    //  7: function o(){}        outlined part of F (hidden)
+    //  8: function h(){}        helper without original scope (hidden)
+    //  9: function G(){}        G
+    // 10: function p(){}        outlined part of G (hidden, unless `outlined` is false)
+    function createInfo({outlined = true}: {outlined?: boolean} = {}): SDK.SourceMapScopesInfo.SourceMapScopesInfo {
+      const builder = new ScopeInfoBuilder();
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
+          .startScope(0, 10, {kind: 'function', name: 'F', key: 'F', isStackFrame: true})
+          .startScope(2, 2, {kind: 'block', key: 'block'})
+          .endScope(3, 3)
+          .endScope(10, 1)
+          .startScope(12, 10, {kind: 'function', name: 'G', key: 'G', isStackFrame: true})
+          .startScope(13, 2, {kind: 'block', key: 'blockG'})
+          .endScope(14, 3)
+          .endScope(15, 1)
+          .endScope(20, 0)
+          .endSource();
+      builder.startRange(0, 0, {scopeKey: 'global'})
+          .startRange(0, 0, {scopeKey: 'F', isStackFrame: true})
+          .startRange(1, 0, {callSite: {sourceIndex: 0, line: 1, column: 2}})
+          .startRange(2, 0, {callSite: {sourceIndex: 0, line: 5, column: 2}})
+          .endRange(2, 5)
+          .endRange(3, 0)
+          .startRange(4, 0, {callSite: {sourceIndex: 0, line: 2, column: 2}})
+          .endRange(4, 5)
+          .startRange(5, 2, {isStackFrame: true})
+          .startRange(5, 5, {callSite: {sourceIndex: 0, line: 7, column: 2}})
+          .endRange(5, 8)
+          .endRange(5, 16)
+          .endRange(6, 1)
+          .startRange(7, 0, {scopeKey: 'block', isStackFrame: true, isHidden: outlined})
+          .endRange(7, 14)
+          .startRange(8, 0, {isStackFrame: true, isHidden: true})
+          .endRange(8, 14)
+          .startRange(9, 0, {scopeKey: 'G', isStackFrame: true})
+          .endRange(9, 14)
+          .startRange(10, 0, {scopeKey: 'blockG', isStackFrame: true, isHidden: outlined})
+          .endRange(10, 14)
+          .endRange(11, 0);
+      return new SourceMapScopesInfo(sinon.createStubInstance(SDK.SourceMap.SourceMap), builder.build());
+    }
+
+    function range(startLine: number, startColumn: number, endLine: number,
+                   endColumn: number): SDK.SourceMapScopesInfo.PositionRange {
+      return {start: {line: startLine, column: startColumn}, end: {line: endLine, column: endColumn}};
+    }
+
+    it('inlinedFunctionRange returns the innermost inlined function body', () => {
+      const info = createInfo();
+      assert.deepEqual(info.inlinedFunctionRange(1, 1), range(1, 0, 3, 0));
+      assert.deepEqual(info.inlinedFunctionRange(2, 1), range(2, 0, 2, 5));
+      assert.deepEqual(info.inlinedFunctionRange(5, 6), range(5, 5, 5, 8));
+    });
+
+    it('inlinedFunctionRange returns null outside of inlined functions', () => {
+      const info = createInfo();
+      assert.isNull(info.inlinedFunctionRange(0, 5));
+      assert.isNull(info.inlinedFunctionRange(5, 3));
+      assert.isNull(info.inlinedFunctionRange(7, 3));
+    });
+
+    it('inlinedCalleeRanges returns the callees inlined directly into the current logical function', () => {
+      const info = createInfo();
+      assert.deepEqual(info.inlinedCalleeRanges(0, 5), [range(1, 0, 3, 0), range(4, 0, 4, 5)]);
+      assert.deepEqual(info.inlinedCalleeRanges(1, 1), [range(2, 0, 2, 5)]);
+      assert.deepEqual(info.inlinedCalleeRanges(5, 3), [range(5, 5, 5, 8)]);
+      assert.deepEqual(info.inlinedCalleeRanges(7, 3), []);
+    });
+
+    it('hasOutlinedFunctions detects hidden generated functions with a definition', () => {
+      assert.isTrue(createInfo().hasOutlinedFunctions());
+      assert.isFalse(createInfo({outlined: false}).hasOutlinedFunctions());
+    });
+
+    it('outlinedFunctionRanges returns the outlined parts of the current function', () => {
+      const info = createInfo();
+      assert.deepEqual(info.outlinedFunctionRanges(0, 5), [range(7, 0, 7, 14)]);
+      // From within the outlined part itself.
+      assert.deepEqual(info.outlinedFunctionRanges(7, 3), [range(7, 0, 7, 14)]);
+      assert.deepEqual(info.outlinedFunctionRanges(9, 3), [range(10, 0, 10, 14)]);
+    });
+
+    it('outlinedFunctionRanges is empty without outlined parts or outside of authored functions', () => {
+      assert.deepEqual(createInfo({outlined: false}).outlinedFunctionRanges(0, 5), []);
+      // The nested function `n` and the helper `h` have no original scope.
+      assert.deepEqual(createInfo().outlinedFunctionRanges(5, 3), []);
+      assert.deepEqual(createInfo().outlinedFunctionRanges(8, 3), []);
+    });
+
+    it('artificialFunctionRanges returns generated functions without any original scope', () => {
+      assert.deepEqual(createInfo().artificialFunctionRanges(), [range(5, 2, 5, 16), range(8, 0, 8, 14)]);
+    });
   });
 
   describe('hasVariablesAndBindings', () => {
     it('returns false for scope info without variables or bindings', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(10, 0, {kind: 'function', isStackFrame: true, name: 'foo', key: 'foo'})
           .endScope(20, 0)
-          .endScope(30, 0);
+          .endScope(30, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 10, {scopeKey: 'foo', isStackFrame: true})
@@ -275,12 +617,14 @@ describe('SourceMapScopesInfo', () => {
 
     it('returns false for scope info with variables but no bindings', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(
               10, 0,
               {kind: 'function', isStackFrame: true, name: 'foo', variables: ['variable1', 'variable2'], key: 'foo'})
           .endScope(20, 0)
-          .endScope(30, 0);
+          .endScope(30, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 10, {scopeKey: 'foo', isStackFrame: true})
@@ -294,12 +638,14 @@ describe('SourceMapScopesInfo', () => {
 
     it('returns true for scope info with variables and bindings', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(
               10, 0,
               {kind: 'function', isStackFrame: true, name: 'foo', variables: ['variable1', 'variable2'], key: 'foo'})
           .endScope(20, 0)
-          .endScope(30, 0);
+          .endScope(30, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 10, {scopeKey: 'foo', isStackFrame: true, values: ['a', 'b']})
@@ -547,7 +893,7 @@ describe('SourceMapScopesInfo', () => {
 
     it('returns null when the inner-most generated range doesn\'t have an original scope', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'}).endScope(20, 0);
+      builder.startSource().startScope(0, 0, {kind: 'global', key: 'global'}).endScope(20, 0).endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 10)  // Small range that doesn't map to anything.
@@ -572,14 +918,16 @@ describe('SourceMapScopesInfo', () => {
       // SM global:|---------------------------------------------------------------------------------------------------|
       //                                                             x (paused: col 50)
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(5, 0,
                       {kind: 'function', isStackFrame: true, name: 'outer', variables: ['outerVar'], key: 'outer'})
           .startScope(10, 0,
                       {kind: 'function', isStackFrame: true, name: 'inner', variables: ['innerVar'], key: 'inner'})
           .endScope(15, 0)
           .endScope(20, 0)
-          .endScope(30, 0);
+          .endScope(30, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 20, {scopeKey: 'outer', isStackFrame: true, values: ['o']})
@@ -619,7 +967,7 @@ describe('SourceMapScopesInfo', () => {
 
     it('returns the original global scope when paused in the global scope', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'}).endScope(20, 0);
+      builder.startSource().startScope(0, 0, {kind: 'global', key: 'global'}).endScope(20, 0).endSource();
       builder.startRange(0, 0, {scopeKey: 'global'}).endRange(0, 100);
 
       const {sourceMap, callFrame} = setUpCallFrameAndSourceMap({
@@ -638,10 +986,12 @@ describe('SourceMapScopesInfo', () => {
     it('returns the inner-most function scope as type "Local" and surrounding function scopes as type "Closure"',
        () => {
          const builder = new ScopeInfoBuilder();
-         builder.startScope(0, 0, {kind: 'function', isStackFrame: true, name: 'outer', key: 'outer'})
+         builder.startSource()
+             .startScope(0, 0, {kind: 'function', isStackFrame: true, name: 'outer', key: 'outer'})
              .startScope(5, 0, {kind: 'function', isStackFrame: true, name: 'inner', key: 'inner'})
              .endScope(15, 0)
-             .endScope(20, 0);
+             .endScope(20, 0)
+             .endSource();
 
          builder.startRange(0, 0, {scopeKey: 'outer'})
              .startRange(0, 25, {scopeKey: 'inner'})
@@ -666,10 +1016,12 @@ describe('SourceMapScopesInfo', () => {
 
     it('drops inner block scopes if a return value is present to account for V8 oddity', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'function', isStackFrame: true, name: 'someFn', key: 'func'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'function', isStackFrame: true, name: 'someFn', key: 'func'})
           .startScope(5, 0, {kind: 'block', key: 'block'})
           .endScope(15, 0)
-          .endScope(20, 0);
+          .endScope(20, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'func'})
           .startRange(0, 25, {scopeKey: 'block'})
@@ -694,12 +1046,14 @@ describe('SourceMapScopesInfo', () => {
       // `kind` is a free-form UI label with no semantic significance, and the spec encourages
       // capitalized values. Only `isStackFrame` decides whether a scope is a function scope.
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'Global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'Global', key: 'global'})
           .startScope(5, 0, {kind: 'Function', isStackFrame: true, name: 'outer', key: 'outer'})
           .startScope(10, 0, {isStackFrame: true, name: 'inner', key: 'inner'})  // No `kind` at all.
           .endScope(15, 0)
           .endScope(18, 0)
-          .endScope(20, 0);
+          .endScope(20, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 20, {scopeKey: 'outer'})
@@ -730,10 +1084,12 @@ describe('SourceMapScopesInfo', () => {
       // scope. When function scopes were identified by `kind === 'function'`, a capitalized 'Function'
       // produced no 'Local' scope and the loop shifted the entire chain off, leaving an empty view.
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'Function', isStackFrame: true, name: 'someFn', key: 'func'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'Function', isStackFrame: true, name: 'someFn', key: 'func'})
           .startScope(5, 0, {kind: 'Block', key: 'block'})
           .endScope(15, 0)
-          .endScope(20, 0);
+          .endScope(20, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'func'})
           .startRange(0, 25, {scopeKey: 'block'})
@@ -777,7 +1133,8 @@ describe('SourceMapScopesInfo', () => {
       //         CDP scopes to work well.
 
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(10, 0, {
             kind: 'function',
             isStackFrame: true,
@@ -786,7 +1143,8 @@ describe('SourceMapScopesInfo', () => {
             key: 'func',
           })
           .endScope(20, 0)
-          .endScope(30, 0);
+          .endScope(30, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 20, {scopeKey: 'func', values: [null, 'b']})
@@ -847,10 +1205,12 @@ describe('SourceMapScopesInfo', () => {
       // Expectation: Report global scope and use bindings from the inner generated range for 'global'.
 
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', variables: ['fooConstant', 'barVariable'], key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['fooConstant', 'barVariable'], key: 'global'})
           .startScope(10, 0, {kind: 'function', isStackFrame: true, name: 'someFn', key: 'func'})
           .endScope(20, 0)
-          .endScope(30, 0);
+          .endScope(30, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global', values: ['42', '"n"']})
           .startRange(0, 20, {scopeKey: 'func'})
@@ -911,14 +1271,16 @@ describe('SourceMapScopesInfo', () => {
       //              In particular we also add a block scope that must be there.
 
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', variables: ['inner', 'outer'], key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['inner', 'outer'], key: 'global'})
           .startScope(0, 14, {kind: 'function', isStackFrame: true, name: 'inner', variables: ['x'], key: 'inner'})
           .endScope(3, 1)
           .startScope(5, 14, {kind: 'function', isStackFrame: true, name: 'outer', variables: ['y'], key: 'outer'})
           .startScope(6, 9, {kind: 'block', key: 'block'})
           .endScope(8, 3)
           .endScope(9, 1)
-          .endScope(12, 0);
+          .endScope(12, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 0, {scopeKey: 'outer', callSite: {sourceIndex: 0, line: 11, column: 0}, values: ['42']})
@@ -968,10 +1330,12 @@ describe('SourceMapScopesInfo', () => {
 
     it('retains both authored global scope and V8 global scope when V8 global scope is present', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', variables: ['authoredGlobal'], key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['authoredGlobal'], key: 'global'})
           .startScope(5, 0, {kind: 'function', isStackFrame: true, name: 'fn', variables: ['localVar'], key: 'fn'})
           .endScope(15, 0)
-          .endScope(20, 0);
+          .endScope(20, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global', values: ['"authored"']})
           .startRange(0, 20, {scopeKey: 'fn', isStackFrame: true, values: ['"local"']})
@@ -1003,12 +1367,14 @@ describe('SourceMapScopesInfo', () => {
     it('builds scope chain for outlined functions (isHidden: true) if and only if they have an associated original scope',
        () => {
          const builder = new ScopeInfoBuilder();
-         builder.startScope(0, 0, {kind: 'global', key: 'global'})
+         builder.startSource()
+             .startScope(0, 0, {kind: 'global', key: 'global'})
              .startScope(
                  5, 0,
                  {kind: 'function', isStackFrame: true, name: 'outlinedWithScope', variables: ['v'], key: 'outlined'})
              .endScope(15, 0)
-             .endScope(20, 0);
+             .endScope(20, 0)
+             .endSource();
 
          builder.startRange(0, 0, {scopeKey: 'global'})
              .startRange(0, 20, {scopeKey: 'outlined', isStackFrame: true, isHidden: true, values: ['"val"']})
@@ -1041,10 +1407,12 @@ describe('SourceMapScopesInfo', () => {
     it('disallows resolveScopeChain for user-attached source maps while keeping other source map features working',
        () => {
          const builder = new ScopeInfoBuilder();
-         builder.startScope(0, 0, {kind: 'global', key: 'global'})
+         builder.startSource()
+             .startScope(0, 0, {kind: 'global', key: 'global'})
              .startScope(5, 0, {kind: 'function', isStackFrame: true, name: 'authoredFn', variables: ['x'], key: 'fn'})
              .endScope(15, 0)
-             .endScope(20, 0);
+             .endScope(20, 0)
+             .endSource();
          builder.startRange(0, 0, {scopeKey: 'global'})
              .startRange(0, 20, {scopeKey: 'fn', isStackFrame: true, values: ['"val"']})
              .endRange(0, 80)
@@ -1079,10 +1447,12 @@ describe('SourceMapScopesInfo', () => {
 
     it('returns null from SourceMap.resolveScopeChain when scopes do not contain variables or bindings', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', key: 'global'})
           .startScope(5, 0, {kind: 'function', isStackFrame: true, name: 'fnNoVars', key: 'fn'})
           .endScope(15, 0)
-          .endScope(20, 0);
+          .endScope(20, 0)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global'})
           .startRange(0, 20, {scopeKey: 'fn', isStackFrame: true})
           .endRange(0, 80)
@@ -1128,19 +1498,27 @@ describe('SourceMapScopesInfo', () => {
                 /* sourceColumn */ 2);
           case 150:
             return null;
+          case 190:
+            return new SDK.SourceMap.SourceMapEntry(line, column, /* sourceIndex */ 0, /* sourceUrl */ undefined,
+                                                    /* sourceLine */ 85,
+                                                    /* sourceColumn */ 2);
         }
         return null;
       });
 
       const addScopes = (builder: ScopesCodec.ScopeInfoBuilder) => {
-        builder.startScope(0, 0, {kind: 'global', key: 'global'})
+        builder.startSource()
+            .startScope(0, 0, {kind: 'global', key: 'global'})
             .startScope(10, 10, {kind: 'function', name: 'myAuthoredFunction', isStackFrame: true, key: 'authored'})
             .startScope(20, 15, {kind: 'block', key: 'block'})
             .endScope(30, 3)
             .endScope(40, 1)
             .startScope(50, 10, {kind: 'function', isStackFrame: true, key: 'unnamed'})
             .endScope(60, 1)
-            .endScope(70, 0);
+            .endScope(70, 0)
+            .startScope(80, 0, {kind: 'function', name: 'secondRootFunction', isStackFrame: true, key: 'secondRoot'})
+            .endScope(90, 0)
+            .endSource();
       };
 
       const mappingsBuilder = new ScopeInfoBuilder();
@@ -1158,7 +1536,9 @@ describe('SourceMapScopesInfo', () => {
           .endRange(0, 120)
           .startRange(0, 140)
           .endRange(0, 160)
-          .endRange(0, 180);
+          .endRange(0, 180)
+          .startRange(0, 180, {scopeKey: 'secondRoot'})
+          .endRange(0, 200);
       const scopeInfoWithRanges = new SourceMapScopesInfo(sourceMap, rangesBuilder.build());
       return [scopeInfoWithRanges, scopeInfoWithMappings];
     })();
@@ -1185,6 +1565,10 @@ describe('SourceMapScopesInfo', () => {
 
         it('returns the empty string for an unnamed function (not null)', () => {
           assert.strictEqual(scopeInfo.findOriginalFunctionName({line: 0, column: 110}), '');
+        });
+
+        it('provides the original name for a function in a second root scope of the same source', () => {
+          assert.strictEqual(scopeInfo.findOriginalFunctionName({line: 0, column: 190}), 'secondRootFunction');
         });
       });
     });
@@ -1307,6 +1691,22 @@ describe('SourceMapScopesInfo', () => {
       }
     });
 
+    it('does not treat functions it can\'t map as hidden compiler helpers', () => {
+      const generatedCode = `function bad() { }`;
+      const ast = Formatter.ScopeParser.parseScopes(generatedCode)?.export();
+
+      const sourceMapJSON = encodeSourceMap([
+        '0:12 => fileA.js:0:12@bad',
+        '0:18 => fileB.js:0:0',
+      ]);
+
+      const sourceMap = new SDK.SourceMap.SourceMap(urlString`compiled.js`, urlString`compiled.js.map`, sourceMapJSON,
+                                                    new Common.Console.Console());
+      const info = SourceMapScopesInfo.createFromAst(sourceMap, ast!, new TextUtils.Text.Text(generatedCode));
+
+      assert.strictEqual(info.translateRawFrame(0, 15).kind, SDK.SourceMapScopesInfo.GeneratedFrameKind.VISIBLE);
+    });
+
     it('inserts scopes correctly when an inner AST node maps to a larger scope than its parent', () => {
       // Scenario:
       //
@@ -1377,115 +1777,33 @@ describe('SourceMapScopesInfo', () => {
     });
   });
 
-  describe('isOutlinedFrame', () => {
-    it('returns false for a global scope', () => {
+  describe('translateRawFrame kind', () => {
+    it('is VISIBLE for top-level code', () => {
       const sourceMap = sinon.createStubInstance(SDK.SourceMap.SourceMap);
       const scopeInfo =
           new SourceMapScopesInfo(sourceMap, new ScopeInfoBuilder().startRange(0, 0).endRange(0, 20).build());
 
-      assert.isFalse(scopeInfo.isOutlinedFrame(0, 10));
+      assert.strictEqual(scopeInfo.translateRawFrame(0, 10).kind, SDK.SourceMapScopesInfo.GeneratedFrameKind.VISIBLE);
     });
 
-    it('returns false for a non-hidden function', () => {
+    it('is OUTLINED for a block scope in a hidden function with a definition', () => {
       const sourceMap = sinon.createStubInstance(SDK.SourceMap.SourceMap);
-      const scopeInfo = new SourceMapScopesInfo(
-          sourceMap,
-          new ScopeInfoBuilder()
-              .startRange(0, 0)
-              .startRange(0, 10, {isStackFrame: true})
-              .endRange(0, 20)
-              .endRange(0, 30)
-              .build());
+      const scopeInfo =
+          new SourceMapScopesInfo(sourceMap,
+                                  new ScopeInfoBuilder()
+                                      .startSource()
+                                      .startScope(0, 0, {isStackFrame: true, key: 'fn'})
+                                      .endScope(10, 0)
+                                      .endSource()
+                                      .startRange(0, 0)
+                                      .startRange(0, 10, {isStackFrame: true, isHidden: true, scopeKey: 'fn'})
+                                      .startRange(0, 20)
+                                      .endRange(0, 30)
+                                      .endRange(0, 40)
+                                      .endRange(0, 50)
+                                      .build());
 
-      assert.isFalse(scopeInfo.isOutlinedFrame(0, 15));
-    });
-
-    it('returns true for a hidden function', () => {
-      const sourceMap = sinon.createStubInstance(SDK.SourceMap.SourceMap);
-      const scopeInfo = new SourceMapScopesInfo(
-          sourceMap,
-          new ScopeInfoBuilder()
-              .startRange(0, 0)
-              .startRange(0, 10, {isStackFrame: true, isHidden: true})
-              .endRange(0, 20)
-              .endRange(0, 30)
-              .build());
-
-      assert.isTrue(scopeInfo.isOutlinedFrame(0, 15));
-    });
-
-    it('returns true for a block scope in a hidden function', () => {
-      const sourceMap = sinon.createStubInstance(SDK.SourceMap.SourceMap);
-      const scopeInfo = new SourceMapScopesInfo(
-          sourceMap,
-          new ScopeInfoBuilder()
-              .startRange(0, 0)
-              .startRange(0, 10, {isStackFrame: true, isHidden: true})
-              .startRange(0, 20)
-              .endRange(0, 30)
-              .endRange(0, 40)
-              .endRange(0, 50)
-              .build());
-
-      assert.isTrue(scopeInfo.isOutlinedFrame(0, 25));
-    });
-  });
-
-  describe('hasInlinedFrames', () => {
-    it('returns false for a function scope', () => {
-      const sourceMap = sinon.createStubInstance(SDK.SourceMap.SourceMap);
-      const scopeInfo = new SourceMapScopesInfo(
-          sourceMap,
-          new ScopeInfoBuilder()
-              .startRange(0, 0)
-              .startRange(0, 10, {isStackFrame: true})
-              .endRange(0, 20)
-              .endRange(0, 30)
-              .build());
-
-      assert.isFalse(scopeInfo.hasInlinedFrames(0, 15));
-    });
-
-    it('returns true for an inlined range', () => {
-      // 'bar' gets inlined into 'foo'.
-      const sourceMap = sinon.createStubInstance(SDK.SourceMap.SourceMap);
-      const scopeInfo = new SourceMapScopesInfo(
-          sourceMap,
-          new ScopeInfoBuilder()
-              .startScope(0, 0, {isStackFrame: true, key: 'fn-foo', name: 'foo'})
-              .endScope(9, 0)
-              .startScope(10, 0, {isStackFrame: true, key: 'fn-bar', name: 'bar'})
-              .endScope(19, 0)
-              .startRange(0, 0, {isStackFrame: true, scopeKey: 'fn-foo'})
-              .startRange(0, 10, {scopeKey: 'fn-bar', callSite: {sourceIndex: 0, line: 5, column: 2}})
-              .endRange(0, 20)
-              .endRange(0, 30)
-              .build());
-
-      assert.isTrue(scopeInfo.hasInlinedFrames(0, 15));
-    });
-
-    it('returns true for an inlined function with a block scope', () => {
-      // 'bar' with a block scope gets inlined into 'foo'.
-      const sourceMap = sinon.createStubInstance(SDK.SourceMap.SourceMap);
-      const scopeInfo = new SourceMapScopesInfo(
-          sourceMap,
-          new ScopeInfoBuilder()
-              .startScope(0, 0, {isStackFrame: true, key: 'fn-foo', name: 'foo'})
-              .endScope(9, 0)
-              .startScope(10, 0, {isStackFrame: true, key: 'fn-bar', name: 'bar'})
-              .startScope(15, 10, {key: 'block-bar'})
-              .endScope(18, 4)
-              .endScope(19, 0)
-              .startRange(0, 0, {isStackFrame: true, scopeKey: 'fn-foo'})
-              .startRange(0, 10, {scopeKey: 'fn-bar', callSite: {sourceIndex: 0, line: 5, column: 2}})
-              .startRange(0, 15, {scopeKey: 'block-bar'})
-              .endRange(0, 19)
-              .endRange(0, 20)
-              .endRange(0, 30)
-              .build());
-
-      assert.isTrue(scopeInfo.hasInlinedFrames(0, 18));
+      assert.strictEqual(scopeInfo.translateRawFrame(0, 25).kind, SDK.SourceMapScopesInfo.GeneratedFrameKind.OUTLINED);
     });
   });
 
@@ -1502,7 +1820,10 @@ describe('SourceMapScopesInfo', () => {
   describe('resolveMappedVariablesAtPosition', () => {
     it('returns null when the inner-most generated range has no original scope', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', variables: ['g'], key: 'global'}).endScope(20, 0);
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['g'], key: 'global'})
+          .endScope(20, 0)
+          .endSource();
       builder.startRange(0, 0, {scopeKey: 'global', values: ['g_gen']})
           .startRange(0, 10)
           .endRange(0, 20)
@@ -1515,7 +1836,8 @@ describe('SourceMapScopesInfo', () => {
 
     it('resolves variables across nested original scopes from inner-most to outer-most', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', variables: ['globalVar'], key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['globalVar'], key: 'global'})
           .startScope(2, 0, {
             kind: 'function',
             isStackFrame: true,
@@ -1526,7 +1848,8 @@ describe('SourceMapScopesInfo', () => {
           .startScope(4, 0, {kind: 'block', variables: ['blockVar', 'computedVar'], key: 'block'})
           .endScope(8, 0)
           .endScope(10, 0)
-          .endScope(12, 0);
+          .endScope(12, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'global', values: ['_global']})
           .startRange(0, 10, {scopeKey: 'outer', isStackFrame: true, values: ['_this', 'n', '_module.prop']})
@@ -1556,7 +1879,7 @@ describe('SourceMapScopesInfo', () => {
 
     it('preserves per-scope entries when inner and outer original scopes declare the same variable name', () => {
       const builder = new ScopeInfoBuilder();
-      builder
+      builder.startSource()
           .startScope(0, 0, {
             kind: 'function',
             isStackFrame: true,
@@ -1569,7 +1892,8 @@ describe('SourceMapScopesInfo', () => {
             key: 'block',
           })
           .endScope(6, 0)
-          .endScope(10, 0);
+          .endScope(10, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'fn', isStackFrame: true, values: ['outer_a', 'outer_u', 'outer_o']})
           .startRange(0, 20, {scopeKey: 'block', values: ['inner_a', null]})
@@ -1594,7 +1918,10 @@ describe('SourceMapScopesInfo', () => {
 
     it('resolves sub-range bindings based on the position', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['x'], key: 'fn'}).endScope(10, 0);
+      builder.startSource()
+          .startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['x'], key: 'fn'})
+          .endScope(10, 0)
+          .endSource();
       builder
           .startRange(0, 0, {
             scopeKey: 'fn',
@@ -1621,12 +1948,14 @@ describe('SourceMapScopesInfo', () => {
 
     it('marks variables as null when an enclosing original scope has no generated range in the chain', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', variables: ['g'], key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['g'], key: 'global'})
           .startScope(2, 0, {kind: 'function', isStackFrame: true, variables: ['outerVar'], key: 'outer'})
           .startScope(4, 0, {kind: 'function', isStackFrame: true, variables: ['innerVar'], key: 'inner'})
           .endScope(6, 0)
           .endScope(8, 0)
-          .endScope(10, 0);
+          .endScope(10, 0)
+          .endSource();
 
       // `inner` is outlined directly inside `global`, so `outer` has no range containing column 50.
       builder.startRange(0, 0, {scopeKey: 'global', values: ['g_val']})
@@ -1646,8 +1975,10 @@ describe('SourceMapScopesInfo', () => {
 
     it('prefers the inner-most generated range when multiple ranges map to the same original scope', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['a', 'b'], key: 'fn'})
-          .endScope(10, 0);
+      builder.startSource()
+          .startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['a', 'b'], key: 'fn'})
+          .endScope(10, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'fn', values: [null, 'outer_b']})
           .startRange(0, 20, {scopeKey: 'fn', values: ['inner_a', null]})
@@ -1664,10 +1995,12 @@ describe('SourceMapScopesInfo', () => {
 
     it('drops inner block scopes when ignoreInnerBlockScopes is true (e.g. paused on a return statement)', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['x', 'fnVar'], key: 'fn'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'function', isStackFrame: true, variables: ['x', 'fnVar'], key: 'fn'})
           .startScope(2, 0, {kind: 'block', variables: ['x', 'blockVar'], key: 'block'})
           .endScope(6, 0)
-          .endScope(10, 0);
+          .endScope(10, 0)
+          .endSource();
 
       builder.startRange(0, 0, {scopeKey: 'fn', isStackFrame: true, values: ['fn_x', 'fn_v']})
           .startRange(0, 20, {scopeKey: 'block', values: ['block_x', 'block_v']})
@@ -1684,7 +2017,8 @@ describe('SourceMapScopesInfo', () => {
 
     it('resolves lexical scopes for inlined function bodies both with and without inner scopes of their own', () => {
       const builder = new ScopeInfoBuilder();
-      builder.startScope(0, 0, {kind: 'global', variables: ['globalVar'], key: 'global'})
+      builder.startSource()
+          .startScope(0, 0, {kind: 'global', variables: ['globalVar'], key: 'global'})
           .startScope(1, 0, {kind: 'function', isStackFrame: true, variables: ['inlinedParam'], key: 'inlinedFn'})
           .startScope(2, 0, {kind: 'block', variables: ['inlinedBlockVar'], key: 'inlinedBlock'})
           .endScope(4, 0)
@@ -1693,7 +2027,8 @@ describe('SourceMapScopesInfo', () => {
           .startScope(8, 0, {kind: 'block', variables: ['callerBlockVar'], key: 'callerBlock'})
           .endScope(10, 0)
           .endScope(11, 0)
-          .endScope(12, 0);
+          .endScope(12, 0)
+          .endSource();
 
       // Generated code range hierarchy:
       // global [0..100] -> callerFn [10..90] -> callerBlock [20..80] -> inlinedFn [30..70] -> inlinedBlock [45..65]
@@ -1735,6 +2070,19 @@ describe('SourceMapScopesInfo', () => {
         new Map<string, string|null>([['inlinedParam', 'i_param']]),
         new Map<string, string|null>([['globalVar', 'g_val']]),
       ]);
+
+      // 4. Selecting the caller frame (inlineFrameIndex = 1) at column 50:
+      // Drops inlinedBlock and inlinedFn, walking callerBlock -> callerFn -> global.
+      assert.deepEqual(
+          info.resolveMappedVariablesAtPosition(0, 50, /* ignoreInnerBlockScopes=*/ false, /* inlineFrameIndex=*/ 1), [
+            new Map<string, string|null>([['callerBlockVar', 'c_block']]),
+            new Map<string, string|null>([['callerParam', 'c_param']]),
+            new Map<string, string|null>([['globalVar', 'g_val']]),
+          ]);
+
+      // 5. Out-of-bounds inlineFrameIndex returns null without hanging.
+      assert.isNull(
+          info.resolveMappedVariablesAtPosition(0, 50, /* ignoreInnerBlockScopes=*/ false, /* inlineFrameIndex=*/ 99));
     });
   });
 

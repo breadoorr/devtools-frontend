@@ -38,7 +38,7 @@ import * as i18n from '../../../../core/i18n/i18n.js';
 import * as Platform from '../../../../core/platform/platform.js';
 import * as TextUtils from '../../../../core/text_utils/text_utils.js';
 import * as Workspace from '../../../../models/workspace/workspace.js';
-import {html, render} from '../../../lit/lit.js';
+import {html, render, type TemplateResult} from '../../../lit/lit.js';
 import * as VisualLogging from '../../../visual_logging/visual_logging.js';
 import * as UI from '../../legacy.js';
 
@@ -121,7 +121,9 @@ export const DEFAULT_VIEW: View = (input, _output, target) => {
           hidden
         >`}
       <devtools-link
-        class="resource-image-unavailable ${input.isUnavailable ? '' : 'hidden'}"
+        class="resource-image-unavailable ${
+          // Do not offer an external link for privileged URLs (e.g. from an imported HAR).
+          input.isUnavailable && !Common.ParsedURL.isPrivilegedScheme(input.url) ? '' : 'hidden'}"
         href=${input.url}
       >
         <devtools-icon name="open-externally"></devtools-icon>
@@ -148,7 +150,7 @@ export class ImageView extends UI.View.SimpleView {
   private readonly sizeLabel: UI.Toolbar.ToolbarText;
   private readonly dimensionsLabel: UI.Toolbar.ToolbarText;
   private readonly aspectRatioLabel: UI.Toolbar.ToolbarText;
-  private readonly mimeTypeLabel: UI.Toolbar.ToolbarText;
+  readonly #mimeType: string;
   private cachedContent?: TextUtils.ContentData.ContentData;
   readonly #view: View;
   #imageSrc: string|null = null;
@@ -175,7 +177,7 @@ export class ImageView extends UI.View.SimpleView {
     this.sizeLabel = new UI.Toolbar.ToolbarText();
     this.dimensionsLabel = new UI.Toolbar.ToolbarText();
     this.aspectRatioLabel = new UI.Toolbar.ToolbarText();
-    this.mimeTypeLabel = new UI.Toolbar.ToolbarText(mimeType);
+    this.#mimeType = mimeType;
     this.performUpdate();
   }
 
@@ -201,17 +203,17 @@ export class ImageView extends UI.View.SimpleView {
     this.#loadResolve = undefined;
   };
 
-  override async toolbarItems(): Promise<UI.Toolbar.ToolbarItem[]> {
+  override async toolbarItems(): Promise<TemplateResult> {
     await this.updateContentIfNeeded();
-    return [
-      this.sizeLabel,
-      new UI.Toolbar.ToolbarSeparator(),
-      this.dimensionsLabel,
-      new UI.Toolbar.ToolbarSeparator(),
-      this.aspectRatioLabel,
-      new UI.Toolbar.ToolbarSeparator(),
-      this.mimeTypeLabel,
-    ];
+    return html`
+      ${this.sizeLabel.element}
+      <div class="toolbar-divider"></div>
+      ${this.dimensionsLabel.element}
+      <div class="toolbar-divider"></div>
+      ${this.aspectRatioLabel.element}
+      <div class="toolbar-divider"></div>
+      <div class="toolbar-text">${this.#mimeType}</div>
+    `;
   }
 
   override wasShown(): void {
@@ -271,9 +273,11 @@ export class ImageView extends UI.View.SimpleView {
                                                 });
     }
 
-    contextMenu.clipboardSection().appendItem(i18nString(UIStrings.openImageInNewTab), this.openInNewTab.bind(this), {
-      jslogContext: 'image-view.open-in-new-tab',
-    });
+    if (!Common.ParsedURL.isPrivilegedScheme(this.url)) {
+      contextMenu.clipboardSection().appendItem(i18nString(UIStrings.openImageInNewTab), this.openInNewTab.bind(this), {
+        jslogContext: 'image-view.open-in-new-tab',
+      });
+    }
     contextMenu.clipboardSection().appendItem(i18nString(UIStrings.saveImageAs), this.saveImage.bind(this), {
       jslogContext: 'image-view.save-image',
     });
@@ -324,6 +328,9 @@ export class ImageView extends UI.View.SimpleView {
   }
 
   private openInNewTab(): void {
+    if (Common.ParsedURL.isPrivilegedScheme(this.url)) {
+      return;
+    }
     Host.InspectorFrontendHost.InspectorFrontendHostInstance.openInNewTab(this.url);
   }
 

@@ -263,7 +263,7 @@ export async function selectStorageItemAtIndex(devToolsPage: DevToolsPage, index
 }
 
 export async function deleteSelectedStorageItem(devToolsPage: DevToolsPage): Promise<void> {
-  await devToolsPage.click('[title="Delete Selected"]');
+  await devToolsPage.click('[title="Delete selected"]');
   await expectVeEvents(
       devToolsPage,
       [veClick('Panel: resources > Pane: session-storage-data > Toolbar > Action: storage-items-view.delete-selected')],
@@ -342,7 +342,7 @@ export async function getPieChartLegendRows(devToolsPage: DevToolsPage): Promise
 }
 
 export async function unregisterServiceWorker(devToolsPage: DevToolsPage): Promise<void> {
-  const UNREGISTER_SERVICE_WORKER_SELECTOR = '[title="Unregister service worker"]';
+  const UNREGISTER_SERVICE_WORKER_SELECTOR = '[title="Unregister Service Worker"]';
   await devToolsPage.click('#tab-resources');
   await navigateToServiceWorkers(devToolsPage);
   await devToolsPage.click(UNREGISTER_SERVICE_WORKER_SELECTOR);

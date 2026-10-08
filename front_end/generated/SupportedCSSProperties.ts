@@ -4313,7 +4313,7 @@ export const generatedProperties: CSSProperty[] = [
    "overlay"
   ],
   "name": "overscroll-container-type",
-  "runtime_flag": "OverscrollGestures",
+  "runtime_flag": "OverscrollAreas",
   "runtime_flag_status": "experimental"
  },
  {
@@ -4603,8 +4603,16 @@ export const generatedProperties: CSSProperty[] = [
   "name": "position-try-order"
  },
  {
+  "devtools_keywords": [
+   "always",
+   "anchor-valid",
+   "anchor-visible",
+   "no-overflow"
+  ],
   "keywords": [
    "always",
+   "anchor-valid",
+   "anchor-visible",
    "anchors-visible",
    "no-overflow"
   ],
@@ -5482,7 +5490,7 @@ export const generatedProperties: CSSProperty[] = [
   ],
   "name": "text-decoration-inset",
   "runtime_flag": "CSSTextDecorationInset",
-  "runtime_flag_status": "experimental"
+  "runtime_flag_status": "stable"
  },
  {
   "keywords": [
@@ -8484,7 +8492,8 @@ export const generatedPropertyValues: Record<string, CSSPropertyValue> = {
  "position-visibility": {
   "values": [
    "always",
-   "anchors-visible",
+   "anchor-valid",
+   "anchor-visible",
    "no-overflow"
   ]
  },

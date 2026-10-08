@@ -190,6 +190,14 @@ function checkForOfScopes({snapshot, analysis}: ContextFixture): void {
   assert.deepEqual(deadFieldNames(bodyScope), [['dead'], ['dead']]);
 }
 
+// Analyzes per-iteration contexts of a classic for loop.
+function checkClassicForLoop({snapshot, analysis}: ContextFixture): void {
+  const scope = singleScopeForScript(analysis, 'classic-for-loop.js');
+
+  assert.deepEqual(allContextFields(snapshot, scope), ['index', 'loopDead']);
+  assert.deepEqual(deadFieldNames(scope), [['loopDead'], ['loopDead']]);
+}
+
 // Classifies a field per context based on whether its reader closure is live.
 function checkDeadClosure({snapshot, analysis}: ContextFixture): void {
   const scope = singleScopeForScript(analysis, 'dead-closure.js');
@@ -350,20 +358,47 @@ function checkInsideDirectEval({snapshot, analysis}: ContextFixture): void {
   assert.deepEqual(deadFieldNames(scope), [['insideEvalDead']]);
 }
 
-// Loads contexts retained by suspended generators.
-function checkGenerator({snapshot, analysis}: ContextFixture): void {
-  const scope = singleScopeForScript(analysis, 'generator.js');
+// Analyzes context fields of vars declared in a strict direct eval.
+function checkStrictEval({snapshot, analysis}: ContextFixture): void {
+  const scope = singleScopeForScript(analysis, 'strict-eval-code.js');
 
-  assert.deepEqual(allContextFields(snapshot, scope), ['generatorDead', 'neededAfterYield']);
-  assert.deepEqual(deadFieldNames(scope), [['generatorDead']]);
+  assert.deepEqual(allContextFields(snapshot, scope), ['strictEvalCaptured', 'strictEvalDead']);
+  assert.deepEqual(deadFieldNames(scope), [['strictEvalDead']]);
+  // The eval scope belongs to the eval'd code, not to the script calling `eval`.
+  assertNoScopes(analysis, 'strict-eval.js');
 }
 
-// Loads contexts retained by suspended async functions.
-function checkAsyncFunction({snapshot, analysis}: ContextFixture): void {
-  const scope = singleScopeForScript(analysis, 'async.js');
+// Doesn't report fields of a paused generator that a function nested in it
+// reads, even if the generator has already passed that function. A paused
+// generator counts as a closure that can still create any of its nested
+// functions.
+function checkGenerator({analysis}: ContextFixture): void {
+  assertNoScopes(analysis, 'generator.js');
+}
 
-  assert.deepEqual(allContextFields(snapshot, scope), ['asyncDead', 'neededAfterAwait']);
-  assert.deepEqual(deadFieldNames(scope), [['asyncDead']]);
+// Doesn't report fields of a paused async function that a function nested in
+// it reads, like for paused generators.
+function checkAsyncFunction({analysis}: ContextFixture): void {
+  assertNoScopes(analysis, 'async.js');
+}
+
+// Keeps fields in use that the body of a paused generator reads once resumed.
+function checkGeneratorBody({analysis}: ContextFixture): void {
+  assertNoScopes(analysis, 'generator-body.js');
+}
+
+// Keeps fields in use that the body of a paused async function reads once
+// resumed.
+function checkAsyncFunctionBody({analysis}: ContextFixture): void {
+  assertNoScopes(analysis, 'async-body.js');
+}
+
+// Reports fields of a finished generator, which can't run anymore.
+function checkFinishedGenerator({snapshot, analysis}: ContextFixture): void {
+  const scope = singleScopeForScript(analysis, 'finished-generator.js');
+
+  assert.deepEqual(allContextFields(snapshot, scope), ['finishedGeneratorDead']);
+  assert.deepEqual(deadFieldNames(scope), [['finishedGeneratorDead']]);
 }
 
 // Parses module scopes and reports their script metadata.
@@ -375,21 +410,62 @@ function checkModuleScopes({snapshot, analysis}: ContextFixture): void {
   assert.deepEqual(deadFieldNames(scope), [['moduleDead']]);
 }
 
-// Does not report script scopes holding top-level let and const yet.
-//
-// Top-level `let`/`const` of a classic script live in a script context, whose
-// ScopeInfo cannot be attributed to a script at the moment: no live
-// SharedFunctionInfo references a SCRIPT_SCOPE ScopeInfo through
-// `name_or_scope_info` (the top-level SharedFunctionInfo is gone once the
-// script finished running), and being outermost it has no `outer_scope_info`
-// to walk up either. Module scopes do not have that problem because the module
-// keeps its top-level SharedFunctionInfo alive.
-//
-// TODO: Once script contexts can be attributed to their script, this should
-// report a single scope for script.js with the context fields
-// ['scriptCaptured', 'scriptDead'], of which 'scriptDead' is dead.
+// Analyzes the module context holding top-level let and const once the module
+// has finished evaluating. The exported binding lives in a cell of the module
+// instead of the context.
+function checkModuleTopLevelScopes({snapshot, analysis}: ContextFixture): void {
+  const scope = singleScopeForScript(analysis, 'module-top-level.js');
+
+  assert.deepEqual(allContextFields(snapshot, scope), ['moduleTopLevelCaptured', 'moduleTopLevelDead']);
+  assert.deepEqual(deadFieldNames(scope), [['moduleTopLevelDead']]);
+}
+
+// Doesn't report fields of a module paused at a top-level await that a
+// function nested in it reads. Unlike a finished module, the paused module can
+// still run.
+function checkModuleTopLevelAwait({analysis}: ContextFixture): void {
+  assertNoScopes(analysis, 'module-top-level-await.js');
+}
+
+// Doesn't report fields of a module that finished evaluating after a top-level
+// await. V8 doesn't close the generator of such a module once it has finished,
+// but leaves it in the executing state. The analysis therefore can't tell that
+// the module has finished and doesn't report `moduleAwaitFinishedDead`.
+function checkModuleTopLevelAwaitFinished({analysis}: ContextFixture): void {
+  assertNoScopes(analysis, 'module-top-level-await-finished.js');
+}
+
+// Does not report script scopes holding top-level let and const. Other scripts
+// may read them by name, and V8 does not record those uses.
 function checkScriptScopes({analysis}: ContextFixture): void {
   assertNoScopes(analysis, 'script.js');
+}
+
+// Does not report class scopes holding private members, but still analyzes the
+// enclosing function scope.
+function checkClassPrivateMembers({snapshot, analysis}: ContextFixture): void {
+  const scope = singleScopeForScript(analysis, 'class-private.js');
+
+  assert.deepEqual(allContextFields(snapshot, scope), ['privateOuterCaptured', 'privateOuterDead']);
+  assert.deepEqual(deadFieldNames(scope), [['privateOuterDead']]);
+}
+
+// Keeps a field alive as long as any of its reader closures is live.
+function checkMultipleReaders({snapshot, analysis}: ContextFixture): void {
+  const scope = singleScopeForScript(analysis, 'multiple-readers.js');
+
+  assert.deepEqual(allContextFields(snapshot, scope), ['multipleReadersDead', 'sharedByReaders']);
+  assert.deepEqual(deadFieldNames(scope), [['multipleReadersDead']]);
+}
+
+// Analyzes context fields of lets declared in a sloppy direct eval.
+function checkSloppyEvalLet({snapshot, analysis}: ContextFixture): void {
+  const scope = singleScopeForScript(analysis, 'sloppy-eval-let-code.js');
+
+  assert.deepEqual(allContextFields(snapshot, scope), ['sloppyEvalCaptured', 'sloppyEvalDead']);
+  assert.deepEqual(deadFieldNames(scope), [['sloppyEvalDead']]);
+  // The calling function calls eval, so its variables are not analyzed.
+  assertNoScopes(analysis, 'sloppy-eval-let.js');
 }
 
 describe('HeapSnapshot analyze context fields API Test', () => {
@@ -406,6 +482,7 @@ describe('HeapSnapshot analyze context fields API Test', () => {
     checkBlockVariables(fixture);
     checkBlockVariablesInInnerClosure(fixture);
     checkForOfScopes(fixture);
+    checkClassicForLoop(fixture);
     checkDeadClosure(fixture);
     checkUninstantiatedInnerClosure(fixture);
     checkShadowedFields(fixture);
@@ -420,9 +497,19 @@ describe('HeapSnapshot analyze context fields API Test', () => {
     checkCapturedThis(fixture);
     checkDirectEval(fixture);
     checkInsideDirectEval(fixture);
+    checkStrictEval(fixture);
     checkGenerator(fixture);
     checkAsyncFunction(fixture);
+    checkGeneratorBody(fixture);
+    checkAsyncFunctionBody(fixture);
+    checkFinishedGenerator(fixture);
     checkModuleScopes(fixture);
+    checkModuleTopLevelScopes(fixture);
+    checkModuleTopLevelAwait(fixture);
+    checkModuleTopLevelAwaitFinished(fixture);
     checkScriptScopes(fixture);
+    checkClassPrivateMembers(fixture);
+    checkMultipleReaders(fixture);
+    checkSloppyEvalLet(fixture);
   });
 });
