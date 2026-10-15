@@ -144,15 +144,6 @@ const WINDOW_LOCAL_STORAGE: Common.Settings.SettingsBackingStore = {
   clear: () => window.localStorage.clear(),
 };
 
-let isCustomDevtoolsFrontendInternal: boolean;
-
-function isCustomDevtoolsFrontend(): boolean {
-  if (typeof isCustomDevtoolsFrontendInternal === 'undefined') {
-    isCustomDevtoolsFrontendInternal = window.location.toString().startsWith('devtools://devtools/custom/');
-  }
-  return isCustomDevtoolsFrontendInternal;
-}
-
 export class MainImpl {
   #readyForTestPromise = Promise.withResolvers<void>();
   #veStartPromise!: Promise<void>;
@@ -309,11 +300,12 @@ export class MainImpl {
   } {
     this.#initializeExperiments();
     let storagePrefix = '';
-    if (isCustomDevtoolsFrontend()) {
+    if (Host.Platform.isCustomDevtoolsFrontend()) {
       storagePrefix = '__custom__';
-    } else if (
-        !Root.Runtime.Runtime.queryParam('can_dock') && Boolean(Root.Runtime.Runtime.queryParam('debugFrontend')) &&
-        !Host.InspectorFrontendHost.isUnderTest()) {
+    } else if (Host.Platform.isRemoteDevtoolsFrontend()) {
+      storagePrefix = '__remote__';
+    } else if (!Root.Runtime.Runtime.queryParam('can_dock') &&
+               Boolean(Root.Runtime.Runtime.queryParam('debugFrontend')) && !Host.InspectorFrontendHost.isUnderTest()) {
       storagePrefix = '__bundled__';
     }
 
@@ -669,7 +661,7 @@ export class MainImpl {
 
   #redispatchClipboardEvent(event: Event): void {
     const eventCopy = new CustomEvent('clipboard-' + event.type, {bubbles: true, composed: true});
-    // @ts-expect-error Used in ElementsTreeOutline
+    // @ts-expect-error Used in DOMTreeWidget
     eventCopy['original'] = event;
     const document = event.target && (event.target as HTMLElement).ownerDocument;
     const target = document ? UI.DOMUtilities.deepActiveElement(document) : null;

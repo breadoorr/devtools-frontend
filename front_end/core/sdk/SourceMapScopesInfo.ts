@@ -614,20 +614,10 @@ export class SourceMapScopesInfo {
   }
 
   /**
-   * @returns true, iff any generated function is outlined, i.e. marked as "hidden" but with a definition (see
-   *          {@link GeneratedFrameKind.OUTLINED}). Hidden functions without a definition are compiler helpers.
-   */
-  hasOutlinedFunctions(): boolean {
-    const hasOutlined = (ranges: ScopesCodec.GeneratedRange[]): boolean =>
-        ranges.some(range => (range.isStackFrame && range.isHidden && range.originalScope !== undefined) ||
-                        hasOutlined(range.children));
-    return hasOutlined(this.#generatedRanges);
-  }
-
-  /**
    * @returns the outlined parts of the authored function at the position: the hidden generated functions whose
-   *          original scope lies within that function's original scope (see {@link GeneratedFrameKind.OUTLINED}).
-   *          Includes the outlined part the position itself is in, if any. Sorted by start position.
+   *          original scope lies within that function's original scope (see {@link GeneratedFrameKind.OUTLINED}),
+   *          but not within a nested authored function. Includes the outlined part the position itself is in, if
+   *          any. Sorted by start position.
    */
   outlinedFunctionRanges(generatedLine: number, generatedColumn: number): PositionRange[] {
     const rangeChain = this.#findGeneratedRangeChain(generatedLine, generatedColumn);
@@ -635,17 +625,17 @@ export class SourceMapScopesInfo {
     if (!functionScope) {
       return [];
     }
-    const isWithinFunction = (scope: ScopesCodec.OriginalScope|undefined): boolean =>
-        scope !== undefined && (scope === functionScope || isWithinFunction(scope.parent));
     const result: PositionRange[] = [];
-    (function walk(ranges: ScopesCodec.GeneratedRange[]) {
+    const walk = (ranges: ScopesCodec.GeneratedRange[]): void => {
       for (const range of ranges) {
-        if (range.isStackFrame && range.isHidden && isWithinFunction(range.originalScope)) {
+        if (range.isStackFrame && range.isHidden && range.originalScope &&
+            this.#findFunctionScopeInOriginalScopeChain(range.originalScope) === functionScope) {
           result.push({start: range.start, end: range.end});
         }
         walk(range.children);
       }
-    })(this.#generatedRanges);
+    };
+    walk(this.#generatedRanges);
     return result;
   }
 

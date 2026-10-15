@@ -45,6 +45,7 @@ import {
   StringRenderer,
   type TracingContext,
   URLRenderer,
+  ValueUpdateTracking,
 } from './PropertyRenderer.js';
 import {StyleEditorWidget} from './StyleEditorWidget.js';
 import type {ActiveAiSuggestionProperty, StylePropertiesSection} from './StylePropertiesSection.js';
@@ -162,6 +163,18 @@ const UIStrings = {
    * @description Title in the Styles tab for the icon button for jumping to the anchor node.
    */
   jumpToAnchorNode: 'Jump to anchor node',
+  /**
+   * @description Title of the button that opens the position-try option menu in the Styles tab of the Elements panel.
+   */
+  positionTrySwatchButton: 'Force `position-try` option',
+  /**
+   * @description Label for the default (unforced) option in the position-try menu in the Styles tab of the Elements panel.
+   */
+  defaultPositionTryOption: 'Default',
+  /**
+   * @description Label for the base style (no fallback) option in the position-try menu in the Styles tab of the Elements panel.
+   */
+  basePositionTryOption: 'Base',
 } as const;
 const str_ = i18n.i18n.registerUIStrings('panels/elements/StylePropertyTreeElement.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
@@ -323,7 +336,9 @@ export class CSSWideKeywordRenderer extends CSSWideKeywordRendererBase {
         SDK.CSSMetadata.cssMetadata().isCustomProperty(resolvedProperty.name)) {
       const color = Common.Color.parse(context.matchedResult.getComputedText(match.node));
       if (color) {
-        return [new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(color, swatch), swatch];
+        const colorSwatch = new ColorRenderer(this.#stylesContainer, this.#treeElement)
+                                .renderColorSwatch(color, swatch, match, context);
+        return [colorSwatch, swatch];
       }
     }
 
@@ -438,7 +453,8 @@ export class VariableRenderer extends VariableRendererBase {
       return [varSwatch];
     }
 
-    const colorSwatch = new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(color, varSwatch);
+    const colorSwatch =
+        new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(color, varSwatch, match, context);
     context.addControl('color', colorSwatch);
 
     if (fromFallback) {
@@ -606,7 +622,8 @@ export class AttributeRenderer extends AttributeRendererBase {
       return [varSwatch];
     }
 
-    const colorSwatch = new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(color, varSwatch);
+    const colorSwatch =
+        new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(color, varSwatch, match, context);
     context.addControl('color', colorSwatch);
 
     if (fromFallback) {
@@ -773,8 +790,8 @@ export class ColorRenderer extends ColorRendererBase {
         colorText.textContent = displayColor.asString();
         const swatch =
             new ColorRenderer(this.#stylesContainer, null)
-                .renderColorSwatch(
-                    displayColor.isGamutClipped() ? color : (displayColor.nickname() ?? displayColor), colorText);
+                .renderColorSwatch(displayColor.isGamutClipped() ? color : (displayColor.nickname() ?? displayColor),
+                                   colorText, match, context);
         swatch.addEventListener(InlineEditor.ColorSwatch.ColorChangedEvent.eventName, ev => {
           colorText.textContent = ev.data.color.asString();
         });
@@ -786,7 +803,7 @@ export class ColorRenderer extends ColorRendererBase {
       }
     }
 
-    const swatch = this.renderColorSwatch(color, valueChild);
+    const swatch = this.renderColorSwatch(color, valueChild, match, context);
     context.addControl('color', swatch);
 
     // For hsl/hwb colors, hook up the angle swatch for the hue.
@@ -813,7 +830,10 @@ export class ColorRenderer extends ColorRendererBase {
     return [swatch, valueChild];
   }
 
-  renderColorSwatch(color: Common.Color.Color|undefined, valueChild: Node): InlineEditor.ColorSwatch.ColorSwatch {
+  // Renders a swatch for `color`, which stands for the text that is displayed in `valueChild`. When the user changes the
+  // color through the swatch, `valueChild` is replaced with the new text, which is recorded as the edit of `match`.
+  renderColorSwatch(color: Common.Color.Color|undefined, valueChild: Node, match: SDK.CSSPropertyParser.Match,
+                    context: RenderingContext): InlineEditor.ColorSwatch.ColorSwatch {
     const editable = this.#treeElement?.editable();
     const shiftClickMessage = i18nString(UIStrings.shiftClickToChangeColorFormat);
     const tooltip = editable ? i18nString(UIStrings.openColorPickerS, {PH1: shiftClickMessage}) : '';
@@ -831,7 +851,9 @@ export class ColorRenderer extends ColorRendererBase {
       };
 
       const onColorFormatChanged = (e: InlineEditor.ColorSwatch.ColorFormatChangedEvent): void => {
-        valueChild.textContent = e.data.color.getAuthoredText() ?? e.data.color.asString();
+        const text = e.data.color.getAuthoredText() ?? e.data.color.asString();
+        valueChild.textContent = text;
+        context.recordEdit(match, text);
         void treeElement.applyStyleText(treeElement.renderedPropertyText(), false);
       };
 
@@ -844,7 +866,9 @@ export class ColorRenderer extends ColorRendererBase {
       const swatchIcon =
           new ColorSwatchPopoverIcon(treeElement, treeElement.stylesContainer().swatchPopoverHelper(), swatch);
       swatchIcon.addEventListener(ColorSwatchPopoverIconEvents.COLOR_CHANGED, ev => {
-        valueChild.textContent = ev.data.getAuthoredText() ?? ev.data.asString();
+        const text = ev.data.getAuthoredText() ?? ev.data.asString();
+        valueChild.textContent = text;
+        context.recordEdit(match, text);
         swatch.setColor(ev.data);
       });
       if (treeElement.property.name === 'color') {
@@ -905,8 +929,8 @@ export class LightDarkColorRenderer extends LightDarkColorRendererBase {
 
     // Pass an undefined color here to insert a placeholder swatch that will be filled in from the async
     // applyColorScheme below.
-    const colorSwatch =
-        new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(undefined, content);
+    const colorSwatch = new ColorRenderer(this.#stylesContainer, this.#treeElement)
+                            .renderColorSwatch(undefined, content, match, context);
     context.addControl('color', colorSwatch);
     void this.applyColorScheme(match, context, colorSwatch, light, dark, lightControls, darkControls);
 
@@ -1053,7 +1077,8 @@ export class ColorMixRenderer extends ColorMixRendererBase {
         const initialColor = Common.Color.parse('#000') as Common.Color.Color;
         const colorText = document.createElement('span');
         colorText.textContent = initialColor.asString();
-        const swatch = new ColorRenderer(this.#stylesContainer, null).renderColorSwatch(initialColor, colorText);
+        const swatch =
+            new ColorRenderer(this.#stylesContainer, null).renderColorSwatch(initialColor, colorText, match, context);
         swatch.addEventListener(InlineEditor.ColorSwatch.ColorChangedEvent.eventName, ev => {
           colorText.textContent = ev.data.color.asString();
         });
@@ -1156,7 +1181,8 @@ export class ContrastColorRenderer extends ContrastColorRendererBase {
       return [content];
     }
 
-    const colorSwatch = new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(color, content);
+    const colorSwatch =
+        new ColorRenderer(this.#stylesContainer, this.#treeElement).renderColorSwatch(color, content, match, context);
     context.addControl('color', colorSwatch);
 
     return [colorSwatch, content];
@@ -1214,10 +1240,12 @@ export class AngleRenderer extends AngleRendererBase {
     });
     cssAngle.addEventListener('valuechanged', async ({data}) => {
       valueElement.textContent = data.value;
+      context.recordEdit(match, data.value);
       await treeElement.applyStyleText(treeElement.renderedPropertyText(), false);
     });
     cssAngle.addEventListener('unitchanged', ({data}) => {
       valueElement.textContent = data.value;
+      context.recordEdit(match, data.value);
     });
 
     context.addControl('angle', cssAngle);
@@ -1726,7 +1754,7 @@ export class GridTemplateRenderer extends GridTemplateRendererBase {
       return Renderer.render(ASTUtils.siblings(ASTUtils.declValue(match.node)), context).nodes;
     }
 
-    const indent = Common.Settings.Settings.instance().moduleSetting('text-editor-indent').get();
+    const indent = Common.Settings.Settings.instance().resolve(SDK.SDKSettings.textEditorIndentSettingDescriptor).get();
     const container = document.createDocumentFragment();
 
     const template = html`
@@ -2263,11 +2291,13 @@ const PositionTryRendererBase: RendererBase<SDK.CSSPropertyParserMatchers.Positi
 // clang-format off
 export class PositionTryRenderer extends PositionTryRendererBase {
   readonly #matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles;
+  readonly #treeElement: StylePropertyTreeElement|null;
   // clang-format on
 
-  constructor(matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles) {
+  constructor(matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles, treeElement: StylePropertyTreeElement|null) {
     super();
     this.#matchedStyles = matchedStyles;
+    this.#treeElement = treeElement;
   }
 
   override render(match: SDK.CSSPropertyParserMatchers.PositionTryMatch, context: RenderingContext): Lit.LitTemplate {
@@ -2276,19 +2306,66 @@ export class PositionTryRenderer extends PositionTryRendererBase {
       const {nodes} = Renderer.render(match.preamble, context);
       content.push(nodes);
     }
+    const node = this.#treeElement ? this.#matchedStyles.nodeForStyle(this.#treeElement.property.ownerStyle) :
+                                     this.#matchedStyles.node();
+    const fallbackLabels: string[] = [];
     for (const [i, fallback] of match.fallbacks.entries()) {
       const fallbackContent = document.createElement('span');
       if (i > 0) {
         fallbackContent.appendChild(document.createTextNode(', '));
       }
-      if (i !== this.#matchedStyles.activePositionFallbackIndex()) {
+      if (!this.#treeElement?.inherited() && node === this.#matchedStyles.node() &&
+          i !== this.#matchedStyles.activePositionFallbackIndex()) {
         fallbackContent.classList.add('inactive-value');
       }
       Renderer.renderInto(fallback, context, fallbackContent);
+      fallbackLabels.push(
+          context.matchedResult.getComputedTextRange(fallback[0], fallback[fallback.length - 1]).trim());
 
       content.push(fallbackContent);
     }
-    return html`${content}`;
+    if (!this.#treeElement || this.#treeElement.overloaded() || this.#treeElement.inherited() ||
+        !this.#treeElement.property.activeInStyle() || !node) {
+      return html`${content}`;
+    }
+    const cssModel = this.#matchedStyles.cssModel();
+    const forcedIndex = cssModel.forcedPositionTryOption(node);
+    const isForced = forcedIndex !== undefined;
+
+    // clang-format off
+    return html`<devtools-icon
+      name=${isForced ? 'layers-filled' : 'layers'}
+      class=${isForced ? 'position-try-swatch-icon toggled' : 'position-try-swatch-icon'}
+      title=${i18nString(UIStrings.positionTrySwatchButton)}
+      role=button
+      tabindex=-1
+      jslog=${VisualLogging.dropDown('position-try').track({click: true})}
+      @click=${(event: MouseEvent) => {
+        event.consume(true);
+        const currentForced = cssModel.forcedPositionTryOption(node);
+        const contextMenu = new UI.ContextMenu.ContextMenu(event);
+        contextMenu.defaultSection().appendCheckboxItem(i18nString(UIStrings.defaultPositionTryOption), () => {
+          cssModel.forcePositionTryOption(node, undefined);
+        }, {checked: currentForced === undefined, jslogContext: 'default'});
+        contextMenu.defaultSection().appendCheckboxItem(i18nString(UIStrings.basePositionTryOption), () => {
+          cssModel.forcePositionTryOption(node, 0);
+        }, {checked: currentForced === 0, jslogContext: 'base'});
+        contextMenu.defaultSection().appendSeparator();
+        for (const [i, label] of fallbackLabels.entries()) {
+          const optionIndex = i + 1;
+          contextMenu.defaultSection().appendCheckboxItem(label, () => {
+            cssModel.forcePositionTryOption(node, optionIndex);
+          }, {checked: currentForced === optionIndex, jslogContext: 'position-try-option'});
+        }
+        void contextMenu.show();
+      }}
+      @mousedown=${(event: Event) => {
+        event.consume();
+      }}
+      @mouseup=${(event: Event) => {
+        event.consume();
+      }}></devtools-icon>${content}`;
+    // clang-format on
   }
 }
 
@@ -2318,7 +2395,7 @@ export function getPropertyRenderers(
     new FlexGridRenderer(stylesContainer, treeElement),
     new PositionAreaRenderer(stylesContainer, treeElement),
     new EnvFunctionRenderer(treeElement, matchedStyles, computedStyles, computedStyleExtraFields),
-    new PositionTryRenderer(matchedStyles),
+    new PositionTryRenderer(matchedStyles, treeElement),
     new LengthRenderer(stylesContainer, propertyName, treeElement),
     new MathFunctionRenderer(stylesContainer, matchedStyles, computedStyles, computedStyleExtraFields, propertyName,
                              treeElement),
@@ -2356,6 +2433,9 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement {
   private contextForTest!: Context|undefined;
   #gridNames: Set<string>|undefined = undefined;
   #tooltipKeyCounts = new Map<string, number>();
+  // The changes that renderers made to the text of the value since it was rendered. Only available if the value was
+  // parsed.
+  #edits: ValueUpdateTracking|undefined;
 
   #lazyRender?: boolean;
 
@@ -2528,6 +2608,12 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement {
       return '';
     }
     return this.nameElement.innerText + ': ' + this.valueElement.innerText;
+  }
+
+  // Like `renderedPropertyText`, but built from the changes that renderers recorded instead of read back from the DOM.
+  // Tests compare the two while the renderers are being migrated. This replaces `renderedPropertyText` afterwards.
+  editedPropertyTextForTest(): string {
+    return `${this.name}: ${this.#edits?.valueText() ?? this.property.value}`;
   }
 
   private updateState(): void {
@@ -2786,14 +2872,17 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement {
 
     this.listItemElement.removeChildren();
     const matchedResult = this.property.parseValue(this.matchedStyles(), this.computedStyles);
-    this.valueElement = Renderer.renderValueElement(this.property, matchedResult, renderers).valueElement;
+    this.#edits = matchedResult ? new ValueUpdateTracking(matchedResult.ast) : undefined;
+    this.valueElement =
+        Renderer.renderValueElement(this.property, matchedResult, renderers, undefined, undefined, this.#edits)
+            .valueElement;
     this.nameElement = Renderer.renderNameElement(this.name);
 
     if (!this.treeOutline) {
       return;
     }
 
-    const indent = Common.Settings.Settings.instance().moduleSetting('text-editor-indent').get();
+    const indent = Common.Settings.Settings.instance().resolve(SDK.SDKSettings.textEditorIndentSettingDescriptor).get();
     UI.UIUtils.createTextChild(
         this.listItemElement.createChild('span', 'styles-clipboard-only'),
         indent.repeat(this.section().nestingLevel + 1) + (this.property.disabled ? '/* ' : ''));

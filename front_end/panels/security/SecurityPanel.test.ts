@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
+import {beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Common from '../../core/common/common.js';
@@ -20,6 +21,25 @@ import * as NetworkForward from '../network/forward/forward.js';
 import * as Security from './security.js';
 
 const {urlString} = Platform.DevToolsPath;
+
+function createSecurityDetails(overrides: Partial<Protocol.Network.SecurityDetails> = {}):
+    Protocol.Network.SecurityDetails {
+  return {
+    protocol: 'TLS 1.3',
+    keyExchange: '',
+    cipher: 'AES_128_GCM',
+    certificateId: 0 as Protocol.Security.CertificateId,
+    subjectName: 'example.com',
+    sanList: [],
+    issuer: 'Test CA',
+    validFrom: 0,
+    validTo: 1,
+    signedCertificateTimestampList: [],
+    certificateTransparencyCompliance: Protocol.Network.CertificateTransparencyCompliance.Unknown,
+    encryptedClientHello: false,
+    ...overrides,
+  };
+}
 
 describe('createHighlightedUrl', () => {
   it('renders a URL without a scheme separator as plain text', () => {
@@ -52,21 +72,7 @@ describeWithEnvironment('SecurityOriginView', () => {
       Security.SecurityPanel.OriginState {
     return {
       securityState: Protocol.Security.SecurityState.Secure,
-      securityDetails: {
-        protocol: 'TLS 1.3',
-        keyExchange: '',
-        cipher: 'AES_128_GCM',
-        certificateId: 0 as Protocol.Security.CertificateId,
-        subjectName: 'example.com',
-        sanList: [],
-        issuer: 'Test CA',
-        validFrom: 0,
-        validTo: 1,
-        signedCertificateTimestampList: [],
-        certificateTransparencyCompliance: Protocol.Network.CertificateTransparencyCompliance.Unknown,
-        encryptedClientHello: false,
-        ...securityDetails,
-      },
+      securityDetails: createSecurityDetails(securityDetails),
       loadedFromCache: false,
     };
   }
@@ -76,22 +82,44 @@ describeWithEnvironment('SecurityOriginView', () => {
         row => [...row.cells].map(cell => cell.textContent ?? ''));
   }
 
+  it('updates security details when the security state changes', () => {
+    const view = new Security.SecurityPanel.SecurityOriginView(urlString`https://foo.bar`, {
+      securityState: Protocol.Security.SecurityState.Unknown,
+      securityDetails: null,
+      loadedFromCache: false,
+    });
+    const securityStateSection = querySelectorErrorOnMissing(view.element, '.security-state-section');
+    assert.include(securityStateSection.textContent, 'No security information');
+
+    const securityDetails = createSecurityDetails({
+      protocol: 'TLS 1.3',
+      subjectName: 'foo.bar',
+    });
+    view.setSecurityState(Protocol.Security.SecurityState.Secure, securityDetails);
+
+    assert.notExists(view.element.querySelector('.security-state-section'));
+    const connectionSection = querySelectorErrorOnMissing(view.element, '.connection-section');
+    assert.deepInclude(getDetailsTableRows(connectionSection), ['Protocol', 'TLS 1.3']);
+    const certificateSection = querySelectorErrorOnMissing(view.element, '.certificate-section');
+    assert.deepInclude(getDetailsTableRows(certificateSection), ['Subject', 'foo.bar']);
+  });
+
   describe('security state section', () => {
     const cases = [
       {
         securityState: Protocol.Security.SecurityState.Secure,
         title: 'Secure',
-        description: 'This origin is a non-HTTPS secure origin.',
+        description: 'This origin is a non-HTTPS secure origin',
       },
       {
         securityState: Protocol.Security.SecurityState.Insecure,
         title: 'Not secure',
-        description: 'Your connection to this origin isn’t secure.',
+        description: 'Your connection to this origin isn’t secure',
       },
       {
         securityState: Protocol.Security.SecurityState.Unknown,
         title: 'No security information',
-        description: 'No security details are available for this origin.',
+        description: 'No security details are available for this origin',
       },
     ];
     for (const {securityState, title, description} of cases) {
@@ -256,7 +284,8 @@ describeWithEnvironment('SecurityOriginView', () => {
     });
 
     it('updates the origin display when the security state changes', () => {
-      const view = new Security.SecurityPanel.SecurityOriginView(urlString`https://foo.bar`, createOriginState());
+      const originState = createOriginState();
+      const view = new Security.SecurityPanel.SecurityOriginView(urlString`https://foo.bar`, originState);
 
       const initialOriginDisplay = view.element.querySelector('.origin-display');
       assert.instanceOf(initialOriginDisplay, HTMLElement);
@@ -268,7 +297,7 @@ describeWithEnvironment('SecurityOriginView', () => {
 
       assert.exists(initialOriginDisplay.querySelector('.url-scheme-secure'));
 
-      view.setSecurityState(Protocol.Security.SecurityState.Insecure);
+      view.setSecurityState(Protocol.Security.SecurityState.Insecure, originState.securityDetails);
 
       const updatedOriginDisplay = view.element.querySelector('.origin-display');
       assert.instanceOf(updatedOriginDisplay, HTMLElement);
@@ -448,11 +477,11 @@ describeWithEnvironment('SecurityOriginView', () => {
     const cases = [
       {
         compliance: Protocol.Network.CertificateTransparencyCompliance.Compliant,
-        expectedNote: 'This request complies with Chrome’s Certificate Transparency policy.',
+        expectedNote: 'This request complies with Chrome’s Certificate Transparency policy',
       },
       {
         compliance: Protocol.Network.CertificateTransparencyCompliance.NotCompliant,
-        expectedNote: 'This request doesn’t comply with Chrome’s Certificate Transparency policy.',
+        expectedNote: 'This request doesn’t comply with Chrome’s Certificate Transparency policy',
       },
     ];
     for (const {compliance, expectedNote} of cases) {
@@ -515,23 +544,9 @@ describeWithEnvironment('SecurityOriginView', () => {
 
     it('renders when security details are available', () => {
       const originState = createOriginState();
-      originState.securityDetails = {
-        protocol: 'TLS 1.3',
-        keyExchange: '',
-        cipher: 'AES_128_GCM',
-        certificateId: 0 as Protocol.Security.CertificateId,
-        subjectName: 'example.com',
-        sanList: [],
-        issuer: 'Test CA',
-        validFrom: 0,
-        validTo: 1,
-        signedCertificateTimestampList: [],
-        certificateTransparencyCompliance: Protocol.Network.CertificateTransparencyCompliance.Unknown,
-        encryptedClientHello: false,
-      };
       const view = new Security.SecurityPanel.SecurityOriginView(urlString`https://foo.bar`, originState);
 
-      assert.deepEqual(getNoteTexts(view), ['The security details above are from the first inspected response.']);
+      assert.deepEqual(getNoteTexts(view), ['The security details above are from the first inspected response']);
     });
 
     it('does not render when security details are null', () => {
@@ -549,7 +564,7 @@ describeWithEnvironment('SecurityOriginView', () => {
 
       assert.deepEqual(getNoteTexts(view), [
         'This response was loaded from cache. Some security details might be missing.',
-        'The security details above are from the first inspected response.',
+        'The security details above are from the first inspected response',
       ]);
     });
 
@@ -587,7 +602,8 @@ describeWithEnvironment('SecurityOriginView', () => {
   });
 
   it('renders an empty SAN', () => {
-    const view = new Security.SecurityPanel.SecurityOriginView(urlString`https://foo.bar`, createOriginState());
+    const view =
+        new Security.SecurityPanel.SecurityOriginView(urlString`https://foo.bar`, createOriginState({sanList: []}));
 
     const sanElement = view.element.querySelector('.san');
     assert.instanceOf(sanElement, HTMLElement);
@@ -610,6 +626,10 @@ describeWithEnvironment('SecurityOriginView', () => {
     assert.notExists(truncationToggle);
   });
 
+  const visibleSanEntries = (sanElement: Element) => [...sanElement.querySelectorAll<HTMLElement>('.san-entry')]
+                                                         .filter(entry => entry.checkVisibility())
+                                                         .map(entry => entry.textContent);
+
   it('renders a SAN with truncation button and updates on truncation toggle', () => {
     const view = new Security.SecurityPanel.SecurityOriginView(
         urlString`https://foo.bar`, createOriginState({sanList: ['a.test', 'b.test', 'c.test', 'd.test']}));
@@ -618,11 +638,7 @@ describeWithEnvironment('SecurityOriginView', () => {
     const sanElement = view.element.querySelector('.san');
     assert.instanceOf(sanElement, HTMLElement);
 
-    const visibleSanEntries = () => [...sanElement.querySelectorAll<HTMLElement>('.san-entry')]
-                                        .filter(entry => entry.checkVisibility())
-                                        .map(entry => entry.textContent);
-
-    assert.deepEqual(visibleSanEntries(), ['a.test', 'b.test']);
+    assert.deepEqual(visibleSanEntries(sanElement), ['a.test', 'b.test']);
 
     const toggleButton = sanElement.querySelector('devtools-button');
     assert.instanceOf(toggleButton, HTMLElement);
@@ -631,15 +647,38 @@ describeWithEnvironment('SecurityOriginView', () => {
 
     toggleButton.click();
 
-    assert.deepEqual(visibleSanEntries(), ['a.test', 'b.test', 'c.test', 'd.test']);
+    assert.deepEqual(visibleSanEntries(sanElement), ['a.test', 'b.test', 'c.test', 'd.test']);
     assert.strictEqual(toggleButton.textContent, 'Show less');
     assert.isTrue(toggleButton.accessibleExpanded);
 
     toggleButton.click();
 
-    assert.deepEqual(visibleSanEntries(), ['a.test', 'b.test']);
+    assert.deepEqual(visibleSanEntries(sanElement), ['a.test', 'b.test']);
     assert.strictEqual(toggleButton.textContent, 'Show more (4 total)');
     assert.isFalse(toggleButton.accessibleExpanded);
+  });
+
+  it('updates SAN truncation when security details change', () => {
+    const view = new Security.SecurityPanel.SecurityOriginView(
+        urlString`https://foo.bar`, createOriginState({sanList: ['a.test', 'b.test', 'c.test', 'd.test']}));
+    renderElementIntoDOM(view);
+
+    const sanElement = view.element.querySelector('.san');
+    assert.instanceOf(sanElement, HTMLElement);
+
+    assert.deepEqual(visibleSanEntries(sanElement), ['a.test', 'b.test']);
+
+    const toggleButton = sanElement.querySelector('devtools-button');
+    assert.instanceOf(toggleButton, HTMLElement);
+    toggleButton.click();
+
+    assert.deepEqual(visibleSanEntries(sanElement), ['a.test', 'b.test', 'c.test', 'd.test']);
+
+    const updatedSecurityDetails =
+        createOriginState({sanList: ['e.test', 'f.test', 'g.test', 'h.test']}).securityDetails;
+    view.setSecurityState(Protocol.Security.SecurityState.Neutral, updatedSecurityDetails);
+
+    assert.deepEqual(visibleSanEntries(sanElement), ['e.test', 'f.test']);
   });
 });
 
@@ -742,6 +781,34 @@ describeWithEnvironment('SecurityPanel', () => {
     const sidebarTreeClearSpy = sinon.spy(securityPanel.sidebar, 'clearOrigins');
     navigate(getMainFrame(target));
     sinon.assert.calledOnce(sidebarTreeClearSpy);
+  });
+
+  it('shows Certificate Transparency compliance when an origin is selected', () => {
+    const securityPanel = Security.SecurityPanel.SecurityPanel.instance({forceNew: true});
+    renderElementIntoDOM(securityPanel);
+    const networkManager = target.model(SDK.NetworkManager.NetworkManager);
+    assert.exists(networkManager);
+
+    const request = createNetworkRequest({
+      url: 'https://foo.test/',
+      documentURL: 'https://foo.test',
+      frameId: '0',
+      loaderId: '0',
+    });
+    request.setSecurityState(Protocol.Security.SecurityState.Secure);
+    request.setSecurityDetails(createSecurityDetails({
+      signedCertificateTimestampList: [],
+      certificateTransparencyCompliance: Protocol.Network.CertificateTransparencyCompliance.Compliant,
+    }));
+    networkManager.dispatchEventToListeners(SDK.NetworkManager.Events.RequestFinished, request);
+
+    securityPanel.sidebar.selectedOrigin = urlString`https://foo.test`;
+
+    const originView = securityPanel.visibleView;
+    assert.instanceOf(originView, Security.SecurityPanel.SecurityOriginView);
+    const section = querySelectorErrorOnMissing(originView.contentElement, '.certificate-transparency-section');
+    const note = querySelectorErrorOnMissing(section, '.origin-view-section-notes');
+    assert.strictEqual(note.textContent, 'This request complies with Chrome’s Certificate Transparency policy');
   });
 
   it('preserves the selected origin when the panel is hidden and shown again', async () => {
@@ -899,7 +966,7 @@ describeWithEnvironment('SecurityPanel', () => {
     assert.strictEqual(unknownOriginElement.textContent, 'https://does-not-resolve.test');
   });
 
-  it('shows an explanation for blocked mixed content', () => {
+  it('shows an explanation for blocked mixed content and clears it on navigation', () => {
     const securityPanel = Security.SecurityPanel.SecurityPanel.instance({forceNew: true});
     renderElementIntoDOM(securityPanel);
     const securityModel = target.model(Security.SecurityModel.SecurityModel);
@@ -929,11 +996,16 @@ describeWithEnvironment('SecurityPanel', () => {
     assert.strictEqual(title.textContent, 'Blocked mixed content');
 
     const explanationText = querySelectorErrorOnMissing(explanation, '.security-explanation-text');
-    assert.include(explanationText.textContent, 'Your page requested non-secure resources that were blocked.');
+    assert.include(explanationText.textContent, 'Your page requested non-secure resources that were blocked');
 
     const requestsLink = querySelectorErrorOnMissing(explanation, 'button.security-mixed-content');
     assert.strictEqual(requestsLink.textContent, 'View 1 request in Network panel');
     assert.strictEqual(requestsLink.getAttribute('role'), 'link');
+
+    // Test that the explanations are cleared on navigation. Regression test for https://crbug.com/601944.
+    navigate(getMainFrame(target));
+
+    assert.isEmpty(securityPanel.mainView.contentElement.querySelectorAll('.security-explanation'));
   });
 
   it('replaces the mixed content reload prompt with a request link when a request is recorded', () => {
@@ -956,13 +1028,13 @@ describeWithEnvironment('SecurityPanel', () => {
       assert.strictEqual(title.textContent, 'Resources - mixed content');
 
       const explanationText = querySelectorErrorOnMissing(explanation, '.security-explanation-text');
-      assert.include(explanationText.textContent, 'This page includes HTTP resources.');
+      assert.include(explanationText.textContent, 'This page includes HTTP resources');
       return explanation;
     }
 
     const explanationBeforeReload = assertMixedContentExplanation();
     const reloadPrompt = querySelectorErrorOnMissing(explanationBeforeReload, '.security-mixed-content');
-    assert.strictEqual(reloadPrompt.textContent, 'Reload the page to record requests for HTTP resources.');
+    assert.strictEqual(reloadPrompt.textContent, 'Reload the page to record requests for HTTP resources');
 
     // Now simulate a refresh.
     securityModel.dispatchEventToListeners(Security.SecurityModel.Events.VisibleSecurityStateChanged,
@@ -1006,7 +1078,7 @@ describeWithEnvironment('SecurityPanel', () => {
 
       const activeExplanationText = querySelectorErrorOnMissing(activeExplanation, '.security-explanation-text');
       assert.include(activeExplanationText.textContent,
-                     'You have recently allowed non-secure content (such as scripts or iframes) to run on this site.');
+                     'You have recently allowed non-secure content (such as scripts or iframes) to run on this site');
 
       assert.isTrue(passiveExplanation.classList.contains('security-explanation-neutral'));
 
@@ -1014,7 +1086,7 @@ describeWithEnvironment('SecurityPanel', () => {
       assert.strictEqual(passiveExplanationTitle.textContent, 'Resources - mixed content');
 
       const passiveExplanationText = querySelectorErrorOnMissing(passiveExplanation, '.security-explanation-text');
-      assert.include(passiveExplanationText.textContent, 'This page includes HTTP resources.');
+      assert.include(passiveExplanationText.textContent, 'This page includes HTTP resources');
       return [activeExplanation, passiveExplanation];
     }
 
@@ -1023,7 +1095,7 @@ describeWithEnvironment('SecurityPanel', () => {
     const explanationsBeforeReload = assertMixedContentExplanations();
     for (const explanation of explanationsBeforeReload) {
       const reloadPrompt = querySelectorErrorOnMissing(explanation, '.security-mixed-content');
-      assert.strictEqual(reloadPrompt.textContent, 'Reload the page to record requests for HTTP resources.');
+      assert.strictEqual(reloadPrompt.textContent, 'Reload the page to record requests for HTTP resources');
     }
 
     // Now simulate a refresh.

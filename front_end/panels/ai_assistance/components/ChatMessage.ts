@@ -895,19 +895,18 @@ function renderWalkthroughUI(input: ChatMessageViewInput, steps: Step[]): Lit.Li
 }
 
 function renderSideEffectStepsUI(input: ChatMessageViewInput, steps: Step[]): Lit.LitTemplate {
-  const sideEffectSteps = steps.filter(s => s.state.type === 'needs_approval' || s.state.type === 'canceled');
+  const sideEffectSteps = steps.filter(s => s.state.type === 'needs_approval');
   if (sideEffectSteps.length === 0) {
     return Lit.nothing;
   }
   // With the natural language interface the approval is rendered as a
   // dedicated permission prompt instead of the side-effect confirmation UI.
-  const showPermissionPrompt = (step: Step): boolean =>
-      AiAssistanceModel.AiUtils.isNaturalLanguageInterfaceEnabled() && step.state.type === 'needs_approval';
+  const showPermissionPrompt = AiAssistanceModel.AiUtils.isNaturalLanguageInterfaceEnabled();
   // clang-format off
   return html`
     ${sideEffectSteps.map(step => html`
       <div class="side-effect-container">
-        ${showPermissionPrompt(step) ?
+        ${showPermissionPrompt ?
           renderPermissionPrompt(step) :
           renderStep({
             step,
@@ -1553,8 +1552,7 @@ async function makeSourceCodeWidget(widgetData: AiAssistanceModel.AiAgent.Source
   let code = widgetData.data.code;
   if (TextUtils.TextUtils.isMinified(code)) {
     const canonicalMimeType = uiSourceCode?.contentType().canonicalMimeType() || 'text/javascript';
-    const formatted = await Formatter.ScriptFormatter.formatScriptContent(Common.Settings.Settings.instance(),
-                                                                          canonicalMimeType, code, '  ');
+    const formatted = await Formatter.ScriptFormatter.formatScriptContent(canonicalMimeType, code, '  ');
     code = formatted.formattedContent;
   }
 
@@ -1805,7 +1803,7 @@ export function getWidgetSignature(widget: AiAssistanceModel.AiAgent.AiWidget): 
       return `${widget.name}`;
     case 'PERF_INSIGHT':
       return `${widget.name}:${widget.data.insight}:${widget.data.insightData.insightKey}:${
-          widget.data.insightData.navigation?.args?.data?.navigationId ?? 'no-nav-id'}`;
+          Trace.Helpers.Trace.navigationIDForEvent(widget.data.insightData.navigation) ?? 'no-nav-id'}`;
     case 'TIMELINE_RANGE_SUMMARY':
       return `${widget.name}:${widget.data.track}:${widget.data.bounds.min}-${widget.data.bounds.max}`;
     case 'BOTTOM_UP_TREE':

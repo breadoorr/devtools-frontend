@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
+import {before, beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Common from '../../core/common/common.js';
@@ -22,8 +23,11 @@ import {MockCDPConnection} from '../../testing/MockCDPConnection.js';
 import {createResource, getMainFrame, mockResourceTree} from '../../testing/ResourceTreeHelpers.js';
 import {TestUniverse} from '../../testing/TestUniverse.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as Lit from '../../ui/lit/lit.js';
 
 import * as Application from './application.js';
+
+const {html} = Lit;
 
 const {urlString} = Platform.DevToolsPath;
 
@@ -557,6 +561,41 @@ describeWithEnvironment('IndexedDBTreeElement live update', () => {
 
     assert.isNull(os1View.element.querySelector('.stale-data-warning'));
     assert.isNull(index1View.element.querySelector('.stale-data-warning'));
+  });
+
+  describe('ResourcesPanel toolbar', () => {
+    it('hides toolbar when view.toolbarItems() resolves to nothing', async () => {
+      const resourcesPanel = Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
+      const simpleView = new UI.View.SimpleView({
+        title: 'Test View' as Platform.UIString.LocalizedString,
+        viewId: 'test-view',
+      });
+      sinon.stub(simpleView, 'toolbarItems').resolves(Lit.nothing);
+
+      resourcesPanel.showView(simpleView);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const toolbar = resourcesPanel.element.querySelector('.resources-toolbar');
+      assert.isNotNull(toolbar);
+      assert.isTrue(toolbar?.classList.contains('hidden'));
+    });
+
+    it('shows toolbar when view.toolbarItems() resolves to a template', async () => {
+      const resourcesPanel = Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
+      const simpleView = new UI.View.SimpleView({
+        title: 'Test View' as Platform.UIString.LocalizedString,
+        viewId: 'test-view',
+      });
+      sinon.stub(simpleView, 'toolbarItems').resolves(html`<span>Test Item</span>`);
+
+      resourcesPanel.showView(simpleView);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const toolbar = resourcesPanel.element.querySelector('.resources-toolbar');
+      assert.isNotNull(toolbar);
+      assert.isFalse(toolbar?.classList.contains('hidden'));
+      assert.include(toolbar?.innerHTML ?? '', 'Test Item');
+    });
   });
 });
 

@@ -90,3 +90,31 @@ export const sourcesWordWrapSettingDescriptor: Common.Settings.SettingDescriptor
   defaultValue: false,
   storageType: Common.Settings.SettingStorageType.SYNCED,
 };
+
+export const inlineVariableValuesSettingDescriptor: Common.Settings.SettingDescriptor<boolean> = {
+  name: 'inline-variable-values',
+  type: Common.Settings.SettingType.BOOLEAN,
+  defaultValue: true,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+};
+
+export const autoFocusOnDebuggerPausedEnabledSettingDescriptor: Common.Settings.SettingDescriptor<boolean> = {
+  name: 'auto-focus-on-debugger-paused-enabled',
+  type: Common.Settings.SettingType.BOOLEAN,
+  defaultValue: true,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+};
+
+export const autoPrettyPrintMinifiedSettingDescriptor: Common.Settings.SettingDescriptor<boolean> = {
+  name: 'auto-pretty-print-minified',
+  type: Common.Settings.SettingType.BOOLEAN,
+  defaultValue: true,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+};
+
+export const allowScrollPastEofSettingDescriptor: Common.Settings.SettingDescriptor<boolean> = {
+  name: 'allow-scroll-past-eof',
+  type: Common.Settings.SettingType.BOOLEAN,
+  defaultValue: true,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+};

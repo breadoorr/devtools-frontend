@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
+import {beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as i18n from '../../core/i18n/i18n.js';
@@ -11,6 +12,7 @@ import {raf} from '../../testing/DOMHelpers.js';
 import {setupLocaleHooks} from '../../testing/LocaleHelpers.js';
 import {setupRuntimeHooks} from '../../testing/RuntimeHelpers.js';
 import {setupSettingsHooks} from '../../testing/SettingsHelpers.js';
+import * as Lit from '../lit/lit.js';
 
 import * as UI from './legacy.js';
 
@@ -27,7 +29,7 @@ describe('StackedPane', () => {
     view.viewId.returns(id);
     view.title.returns(i18n.i18n.lockedString(title));
     view.widget.resolves(sinon.createStubInstance(UI.Widget.Widget));
-    view.toolbarItems.resolves([]);
+    view.toolbarItems.resolves(Lit.nothing);
     return view;
   };
 
@@ -124,7 +126,7 @@ describe('ExpandableContainerWidget', () => {
     mockView.viewId.returns('test-view');
     mockView.title.returns('Test View' as Platform.UIString.LocalizedString);
     mockView.widget.resolves(mockWidget);
-    mockView.toolbarItems.resolves([]);
+    mockView.toolbarItems.resolves(Lit.nothing);
 
     createToolbarStub = sinon.stub().returns(document.createElement('div'));
 

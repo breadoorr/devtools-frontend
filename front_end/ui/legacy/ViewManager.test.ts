@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
+import {beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Common from '../../core/common/common.js';
@@ -10,8 +11,11 @@ import * as i18n from '../../core/i18n/i18n.js';
 import {raf} from '../../testing/DOMHelpers.js';
 import {describeWithEnvironment, updateHostConfig} from '../../testing/EnvironmentHelpers.js';
 import {TestUniverse} from '../../testing/TestUniverse.js';
+import * as Lit from '../lit/lit.js';
 
 import * as UI from './legacy.js';
+
+const {html} = Lit;
 
 type EventTargetEvent<T> = Common.EventTarget.EventTargetEvent<T>;
 
@@ -408,6 +412,20 @@ describeWithEnvironment('ViewManager', () => {
       const expandedViews = events.map(e => e.data.hiddenViewId);
       assert.include(expandedViews, 'view-a');
       assert.include(expandedViews, 'view-b');
+    });
+  });
+
+  describe('createToolbar', () => {
+    it('returns null for Lit.nothing', () => {
+      assert.isNull(UI.ViewManager.ViewManager.createToolbar(Lit.nothing));
+    });
+
+    it('returns a toolbar with rendered content for a LitTemplate', () => {
+      const template = html`<span>Test Toolbar</span>`;
+      const toolbar = UI.ViewManager.ViewManager.createToolbar(template);
+      assert.isNotNull(toolbar);
+      assert.instanceOf(toolbar, HTMLElement);
+      assert.include(toolbar.innerHTML, 'Test Toolbar');
     });
   });
 });

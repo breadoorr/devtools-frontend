@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
+import {afterEach, beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Platform from '../../core/platform/platform.js';
 import type * as ProtocolClient from '../../core/protocol_client/protocol_client.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as Protocol from '../../generated/protocol.js';
+import * as LiveMetrics from '../../models/live-metrics/live-metrics.js';
 import {createTarget, describeWithEnvironment} from '../../testing/EnvironmentHelpers.js';
 import {MockCDPConnection} from '../../testing/MockCDPConnection.js';
 
@@ -72,6 +74,20 @@ describeWithEnvironment('LighthouseProtocolService', () => {
     sinon.assert.calledOnce(resumeAllTargets);
   });
 
+  it('disables live metrics on attach and re-enables on detach', async () => {
+    const liveMetrics = LiveMetrics.LiveMetrics.instance();
+    const disableStub = sinon.stub(liveMetrics, 'disable').resolves();
+    const enableStub = sinon.stub(liveMetrics, 'enable').resolves();
+
+    const service = new Lighthouse.LighthouseProtocolService.ProtocolService();
+    await service.attach(urlString`https://example.com/page`);
+    sinon.assert.calledOnce(disableStub);
+    sinon.assert.notCalled(enableStub);
+
+    await service.detach();
+    sinon.assert.calledOnce(enableStub);
+  });
+
   it('rejects pending requests when detached', async () => {
     // Mock Worker to avoid starting a real Lighthouse worker.
     const mockWorker = new EventTarget() as unknown as Worker;
@@ -114,6 +130,38 @@ describeWithEnvironment('LighthouseProtocolService', () => {
     } finally {
       workerStub.restore();
     }
+  });
+
+  it('rejects requests that are still waiting for the worker when detached', async () => {
+    // Mock Worker to avoid starting a real Lighthouse worker.
+    const mockWorker = new EventTarget() as unknown as Worker;
+    mockWorker.postMessage = sinon.stub() as unknown as typeof mockWorker.postMessage;
+    mockWorker.terminate = sinon.stub() as unknown as typeof mockWorker.terminate;
+    sinon.stub(globalThis, 'Worker').returns(mockWorker);
+
+    connection.setSuccessHandler('Target.attachToTarget',
+                                 () => ({sessionId: 'mock-session-id' as Protocol.Target.SessionID}));
+    const service = new Lighthouse.LighthouseProtocolService.ProtocolService();
+    await service.attach(urlString`https://example.com/page`);
+
+    // Start collecting results. The request waits for the worker to report that it is ready.
+    const requestOutcome = service
+                               .collectLighthouseResults({
+                                 inspectedURL: urlString`https://example.com`,
+                                 categoryIDs: ['accessibility'],
+                                 flags: {formFactor: 'mobile', mode: 'snapshot'},
+                               })
+                               .then(() => 'resolved', (err: unknown) => err);
+
+    // The user cancels while the worker is still loading.
+    const detachPromise = service.detach();
+    mockWorker.dispatchEvent(new MessageEvent('message', {data: 'workerReady'}));
+    await detachPromise;
+
+    const pending = new Promise(resolve => setTimeout(() => resolve('pending'), 0));
+    const outcome = await Promise.race([requestOutcome, pending]);
+
+    assert.instanceOf(outcome, Lighthouse.LighthouseProtocolService.CancelledError);
   });
 
   it('auto-accepts same-origin dialogs and blocks cross-origin dialogs', async () => {

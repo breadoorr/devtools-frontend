@@ -43,6 +43,7 @@ DEFAULT_FEATURE_SET.enable('DevToolsAiPromptApi');
 DEFAULT_FEATURE_SET.enable('DevToolsAiAssistanceContextSelectionAgent');
 DEFAULT_FEATURE_SET.enable('DevToolsAiAssistanceAccessibilityAgent');
 DEFAULT_FEATURE_SET.enable('DevToolsAiAssistanceStorageAgent');
+DEFAULT_FEATURE_SET.enable('DevToolsAiV2Architecture');
 DEFAULT_FEATURE_SET.enable('DevToolsUseGcaApi');
 
 // The unstable feature set (can be enabled via `--enable-unstable-features`).
@@ -122,7 +123,7 @@ const argv = yargs(hideBin(process.argv))
     ['unstable-features', 'enable-features', 'disable-features'],
     'Feature options:',
   )
-  .usage('npm start -- [options] [urls...]')
+  .usage('scripts/tools/dt.py start [options] [urls...]')
   .help('help')
   .version(false)
   .parseSync();

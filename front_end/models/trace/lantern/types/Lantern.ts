@@ -26,6 +26,8 @@ export const NetworkRequestTypes = {
   FedCM: 'FedCM',
 } as const;
 
+// TODO: Consolidate Lantern's legacy TraceEvent interface with
+// the canonical DevTools trace event types in front_end/models/trace/types/TraceEvents.ts.
 export interface TraceEvent {
   name: string;
   args: {
@@ -33,6 +35,7 @@ export interface TraceEvent {
     data?: {
       frame?: string,
       readyState?: number,
+      scriptId?: number,
       stackTrace?: Array<{
                   url: string,
                 }>,
@@ -217,6 +220,13 @@ export namespace Simulation {
     timestamps: {
       firstContentfulPaint: number,
       largestContentfulPaint?: number,
+    };
+    largestContentfulPaintEvt?: {
+      args: {
+        data?: {
+          type?: string,
+        },
+      },
     };
   }
 

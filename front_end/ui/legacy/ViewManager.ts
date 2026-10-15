@@ -12,7 +12,7 @@ import * as Platform from '../../core/platform/platform.js';
 import * as Root from '../../core/root/root.js';
 import type * as Foundation from '../../foundation/foundation.js';
 import {createIcon} from '../kit/kit.js';
-import {render, type TemplateResult} from '../lit/lit.js';
+import {type LitTemplate, nothing, render} from '../lit/lit.js';
 import * as VisualLogging from '../visual_logging/visual_logging.js';
 
 import * as ARIAUtils from './ARIAUtils.js';
@@ -20,7 +20,7 @@ import type {ContextMenu} from './ContextMenu.js';
 import * as PlusButton from './PlusButton.js';
 import {StackedPane} from './StackedPane.js';
 import {type EventData, Events as TabbedPaneEvents, TabbedPane} from './TabbedPane.js';
-import {type ItemsProvider, type ToolbarItem, ToolbarMenuButton} from './Toolbar.js';
+import {type ItemsProvider, ToolbarMenuButton} from './Toolbar.js';
 import type {TabbedViewLocation, View, ViewLocation} from './View.js';
 import {
   getLocalizedViewLocationCategory,
@@ -120,9 +120,9 @@ export class PreRegisteredView implements View {
     return this.viewRegistration.persistence;
   }
 
-  async toolbarItems(): Promise<ToolbarItem[]|TemplateResult> {
+  async toolbarItems(): Promise<LitTemplate> {
     if (!this.viewRegistration.hasToolbar) {
-      return [];
+      return nothing;
     }
     const provider = await this.widget() as unknown as ItemsProvider;
     return provider.toolbarItems();
@@ -245,19 +245,13 @@ export class ViewManager extends Common.ObjectWrapper.ObjectWrapper<EventTypes> 
     viewManagerInstance = undefined;
   }
 
-  static createToolbar(toolbarItems: ToolbarItem[]|TemplateResult): Element|null {
-    if (Array.isArray(toolbarItems) && !toolbarItems.length) {
+  static createToolbar(toolbarItems: LitTemplate): Element|null {
+    if (toolbarItems === nothing) {
       return null;
     }
     const toolbar = document.createElement('devtools-toolbar');
-    if (Array.isArray(toolbarItems)) {
-      for (const item of toolbarItems) {
-        toolbar.appendToolbarItem(item);
-      }
-    } else {
-      // eslint-disable-next-line @devtools/no-lit-render-outside-of-view
-      render(toolbarItems, toolbar);
-    }
+    // eslint-disable-next-line @devtools/no-lit-render-outside-of-view
+    render(toolbarItems, toolbar);
     return toolbar;
   }
 

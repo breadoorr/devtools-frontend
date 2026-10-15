@@ -37,7 +37,7 @@ export interface CommentAnchorSignature {
   /** Visual logging tree path, e.g. "Panel: elements > Pane: styles > TreeOutline > TreeItem: color" */
   vePath: string;
   /** Normalized text content of the target node */
-  textSignature: string;
+  textSignature?: string;
   /** Text content of the parent container VE node for sibling disambiguation */
   parentTextSignature?: string;
   /** 0-indexed position among siblings sharing the same visual logging path */
@@ -129,6 +129,19 @@ export class CommentThread extends Common.ObjectWrapper.ObjectWrapper<EventTypes
     if (changed) {
       this.dispatchEventToListeners(Events.CHANGED);
     }
+  }
+
+  editComment(text: string): void {
+    const trimmed = text.trim();
+    if (this.status !== 'ACTIVE' || !trimmed) {
+      return;
+    }
+    const comment = this.comments.find(c => c.author === 'DEVELOPER');
+    if (!comment || comment.text === trimmed) {
+      return;
+    }
+    comment.text = trimmed;
+    this.dispatchEventToListeners(Events.CHANGED);
   }
 
   sendToAgent(text?: string, author: 'DEVELOPER'|'AGENT' = 'DEVELOPER'): void {

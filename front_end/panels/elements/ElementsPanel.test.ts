@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
+import {afterEach, beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Common from '../../core/common/common.js';
@@ -324,8 +325,6 @@ describeWithEnvironment('ElementsPanel', () => {
     selectedNode.resolveToObject = mockResolveToObject;
 
     // Mock out a few things in the UI that's not necessary for this test.
-    const animateOnDOMUpdate = sinon.mock().atLeast(1).returns(undefined);
-    Elements.ElementsTreeElement.ElementsTreeElement.animateOnDOMUpdate = animateOnDOMUpdate;
     const stylesSidebarPaneUpdate = sinon.mock().atLeast(1).returns(undefined);
     panel.stylesWidget.performUpdate = stylesSidebarPaneUpdate;
 
