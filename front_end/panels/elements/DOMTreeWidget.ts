@@ -120,7 +120,7 @@ interface ViewInput {
   selectedClosingTag: boolean;
 
   onSelect: (node: SDK.DOMModel.DOMNode, isClosingTag: boolean, selectedByUser: boolean) => void;
-  onExpand: (node: SDK.DOMModel.DOMNode, expanded: boolean) => void;
+  onExpand: (node: SDK.DOMModel.DOMNode, expanded: boolean, recursively?: boolean) => void;
   onContextMenu: (node: SDK.DOMModel.DOMNode, event: MouseEvent) => void;
   onClearMaxRows: () => void;
   onHoverNode: (node: SDK.DOMModel.DOMNode|null, showInfo: boolean, isClosingTag: boolean) => void;
@@ -231,7 +231,6 @@ function isBeingEditedAsHTML(state: Pick<ViewInput, 'multilineEditingNode'|'node
 
 function getVisibleChildren(node: SDK.DOMModel.DOMNode, {showComments}: TreeOptions): SDK.DOMModel.DOMNode[] {
   const children: SDK.DOMModel.DOMNode[] = [];
-  children.push(...DOMTreeElementWidget.visibleShadowRoots(node));
 
   const contentDocument = node.contentDocument();
   if (contentDocument) {
@@ -259,6 +258,8 @@ function getVisibleChildren(node: SDK.DOMModel.DOMNode, {showComments}: TreeOpti
   if (beforePseudo) {
     children.push(beforePseudo);
   }
+
+  children.push(...DOMTreeElementWidget.visibleShadowRoots(node));
 
   children.push(...node.carouselPseudoElements());
 
@@ -659,7 +660,7 @@ export const DEFAULT_VIEW: View = (input: ViewInput, _output: undefined, target:
       if (!isCollapsible) {
         return;
       }
-      input.onExpand(node, event.detail.expanded);
+      input.onExpand(node, event.detail.expanded, event.detail.recursively);
     };
 
     const isDragOver = input.dragOverNode?.node === node && !input.dragOverNode.isClosingTag;
@@ -688,6 +689,16 @@ export const DEFAULT_VIEW: View = (input: ViewInput, _output: undefined, target:
     const onContextMenu = (event: MouseEvent): void => {
       event.stopPropagation();
       input.onContextMenu(node, event);
+    };
+
+    // Prevent the native word selection on double click. The double click
+    // starts inline editing instead. Inside an active inline editor the
+    // native selection must stay enabled.
+    const onMouseDown = (event: MouseEvent): void => {
+      if (event.detail < 2 || UI.UIUtils.isBeingEdited(event.target as Node)) {
+        return;
+      }
+      event.preventDefault();
     };
 
     const onDragStart = (event: DragEvent): void => {
@@ -733,6 +744,7 @@ export const DEFAULT_VIEW: View = (input: ViewInput, _output: undefined, target:
           @select=${on((event: UI.TreeOutline.TreeViewElement.SelectEvent) => onSelect(false, Boolean(event.detail?.selectedByUser)))}
           @expand=${on(onExpand)}
           @mousemove=${on(onMouseMove(/* isClosingTag= */ false))}
+          @mousedown=${on(onMouseDown)}
           @contextmenu=${on(onContextMenu)}
           @dragstart=${on(onDragStart)}
           @dragover=${on(onDragOver(/* isClosingTag= */ false))}
@@ -816,6 +828,7 @@ export const DEFAULT_VIEW: View = (input: ViewInput, _output: undefined, target:
                     @select=${on((event: UI.TreeOutline.TreeViewElement.SelectEvent) => onSelect(true, Boolean(event.detail?.selectedByUser)))}
                     @contextmenu=${on(onContextMenu)}
                     @mousemove=${on(onMouseMove(/* isClosingTag= */ true))}
+                    @mousedown=${on(onMouseDown)}
                     @dragstart=${on(onDragStart)}
                     @dragover=${on(onDragOver(/* isClosingTag= */ true))}
                     @dragleave=${on(onDragLeave)}
@@ -860,11 +873,15 @@ export const DEFAULT_VIEW: View = (input: ViewInput, _output: undefined, target:
   const totalVisibleRows = input.maxRowsShown ? countAllVisibleRows() : 0;
   const truncatedLines = input.maxRowsShown ? Math.max(0, totalVisibleRows - input.maxRowsShown) : 0;
 
+  // This widget renders without a shadow root, so you must scope its
+  // stylesheets. Otherwise, broad rules such as `* {min-width: 0}` in
+  // `inspectorCommon.css` apply to the host's whole tree scope and break the
+  // layout of hosts such as the AI assistance chat.
   // clang-format off
   render(html`
-    <style>${UI.inspectorCommonStyles}</style>
-    <style>${domTreeWidgetStyles}</style>
-    <style>${CodeHighlighter.codeHighlighterStyles}</style>
+    <style>@scope to (devtools-widget > *) { ${UI.inspectorCommonStyles} }</style>
+    <style>@scope to (devtools-widget > *) { ${domTreeWidgetStyles} }</style>
+    <style>@scope to (devtools-widget > *) { ${CodeHighlighter.codeHighlighterStyles} }</style>
     <div class=${disclosureClasses} style=${disclosureStyles}>
       <devtools-tree
         class="elements-tree-outline ${input.wrap ? '' : 'elements-tree-nowrap'} ${input.hideGutter ? 'elements-hide-gutter' : ''} ${isSingleNode ? 'single-node' : ''}"
@@ -1773,7 +1790,11 @@ export class DOMTreeWidget extends UI.Widget.Widget {
         node.highlight();
         Host.userMetrics.actionTaken(Host.UserMetrics.Action.ChangeInspectedNodeInElementsPanel);
       },
-      onExpand: (node: SDK.DOMModel.DOMNode, expanded: boolean) => {
+      onExpand: (node: SDK.DOMModel.DOMNode, expanded: boolean, recursively = false) => {
+        if (expanded && recursively) {
+          void this.expandRecursively(node);
+          return;
+        }
         this.setNodeExpanded(node, expanded);
       },
       onContextMenu: (node: SDK.DOMModel.DOMNode, event: MouseEvent) => {

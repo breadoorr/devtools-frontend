@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
-import {before, beforeEach, describe, it} from 'mocha';
+import {beforeEach, describe, it} from 'mocha';
 
+import {setupLocaleHooks} from '../../../../testing/LocaleHelpers.js';
 import {TraceLoader} from '../../../../testing/TraceLoader.js';
 import * as Trace from '../../trace.js';
 import * as Lantern from '../lantern.js';
@@ -13,9 +14,10 @@ import {toLanternTrace} from '../testing/testing.js';
 const {NetworkAnalyzer} = Lantern.Core;
 
 describe('NetworkAnalyzer', () => {
+  setupLocaleHooks();
   let requests: Trace.Lantern.Types.NetworkRequest[];
   let requestsWithRedirect: Trace.Lantern.Types.NetworkRequest[];
-  before(async function() {
+  beforeEach(async function() {
     const parsedTrace = await TraceLoader.traceEngine(this, 'lantern/paul/trace.json.gz');
     const parsedTraceWithRedirect = await TraceLoader.traceEngine(this, 'lantern/redirect/trace.json.gz');
     const trace = toLanternTrace(parsedTrace.traceEvents);
@@ -528,6 +530,40 @@ describe('NetworkAnalyzer', () => {
       assert.strictEqual(mainDocument.url, 'https://www.paulirish.com/');
     });
 
+    it('should strip #hash fragments from trace ResourceSendRequest URLs and link initiators', async function() {
+      const parsedTrace = await TraceLoader.traceEngine(this, 'lantern/paul/trace.json.gz');
+      const trace = toLanternTrace(parsedTrace.traceEvents);
+      const byTime = parsedTrace.data.NetworkRequests.byTime.map(request => {
+        if (request.args.data.url !== 'https://www.paulirish.com/') {
+          return request;
+        }
+        const cloned = structuredClone(request);
+        cloned.args.data.url = 'https://www.paulirish.com/#fragment';
+        return cloned;
+      });
+      const data = {
+        ...parsedTrace.data,
+        NetworkRequests: {
+          ...parsedTrace.data.NetworkRequests,
+          byTime,
+        },
+      };
+
+      const requestsWithHash = Trace.LanternComputationData.createNetworkRequests(trace, data);
+      const mainDocument = NetworkAnalyzer.findResourceForUrl(requestsWithHash, 'https://www.paulirish.com/');
+      assert.isOk(mainDocument);
+      assert.strictEqual(mainDocument.url, 'https://www.paulirish.com/');
+
+      const graph = Trace.LanternComputationData.createGraph(requestsWithHash, trace, data, {
+        requestedUrl: 'https://www.paulirish.com/',
+        mainDocumentUrl: 'https://www.paulirish.com/',
+      });
+      assert.strictEqual(graph.type, 'network');
+      const dependents = graph.getDependents();
+      assert.isAbove(dependents.length, 0);
+      assert.isOk(dependents.some(node => node.getDependents().length > 0));
+    });
+
     it('should match redirect request when cross-origin redirect URL path was scrubbed to origin in trace',
        async function() {
          const parsedTrace = await TraceLoader.traceEngine(this, 'cross-origin-redirect.json.gz');
@@ -554,6 +590,32 @@ describe('NetworkAnalyzer', () => {
          }
          assert.strictEqual(graph.request.url, 'http://127.0.0.1:54321/');
        });
+
+    it('should not fall back to an unrelated non-document or same-origin redirecting request', () => {
+      const subresourceFinal = createRecord({url: 'https://other-host.com/final', resourceType: 'Other'});
+      const subresourceRedirect = createRecord({
+        url: 'https://host.com/',
+        resourceType: undefined,
+      });
+      subresourceRedirect.redirectDestination = subresourceFinal;
+
+      const sameOriginDocFinal = createRecord({url: 'https://host.com/home', resourceType: 'Document'});
+      const sameOriginDocRedirect = createRecord({
+        url: 'https://host.com/',
+        resourceType: undefined,
+      });
+      sameOriginDocRedirect.redirectDestination = sameOriginDocFinal;
+
+      const mockRecords = [
+        subresourceRedirect,
+        subresourceFinal,
+        sameOriginDocRedirect,
+        sameOriginDocFinal,
+      ];
+
+      const result = NetworkAnalyzer.findResourceForUrl(mockRecords, 'https://host.com/some/path');
+      assert.isUndefined(result);
+    });
   });
 
   describe('#resolveRedirects', () => {

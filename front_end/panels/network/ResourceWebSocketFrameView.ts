@@ -113,15 +113,16 @@ export class ResourceWebSocketFrameView extends ResourceChunkView<SDK.NetworkReq
   override wasShown(): void {
     super.wasShown();
     this.requestUpdate();
-    this.request.addEventListener(SDK.NetworkRequest.Events.WEBSOCKET_FRAME_ADDED, this.onWebSocketFrameAdded, this);
+    this.request.addEventListener(SDK.NetworkRequest.Events.WEBSOCKET_FRAME_ADDED, this.#onWebSocketFrameAdded, this);
   }
 
   override willHide(): void {
     super.willHide();
-    this.request.removeEventListener(SDK.NetworkRequest.Events.WEBSOCKET_FRAME_ADDED, this.onWebSocketFrameAdded, this);
+    this.request.removeEventListener(SDK.NetworkRequest.Events.WEBSOCKET_FRAME_ADDED, this.#onWebSocketFrameAdded,
+                                     this);
   }
 
-  private onWebSocketFrameAdded(event: Common.EventTarget.EventTargetEvent<SDK.NetworkRequest.WebSocketFrame>): void {
+  #onWebSocketFrameAdded(event: Common.EventTarget.EventTargetEvent<SDK.NetworkRequest.WebSocketFrame>): void {
     this.chunkAdded(event.data);
   }
 
@@ -175,6 +176,7 @@ class ResourceFrameNode extends DataGridItem {
       length = i18nString(UIStrings.na);
     } else if (isTextFrame) {
       description = dataText;
+      length = i18n.ByteUtilities.bytesToString(Platform.StringUtilities.countWtf8Bytes(frame.text));
     } else if (frame.opCode === OpCodes.BINARY_FRAME) {
       length = i18n.ByteUtilities.bytesToString(Platform.StringUtilities.base64ToSize(frame.text));
       description = opCodeDescriptions[frame.opCode]();

@@ -46,6 +46,7 @@ import * as TextUtils from '../../core/text_utils/text_utils.js';
 import * as Protocol from '../../generated/protocol.js';
 import * as AiAssistanceModel from '../../models/ai_assistance/ai_assistance.js';
 import * as Badges from '../../models/badges/badges.js';
+import type * as CommentManager from '../../models/comment_manager/comment_manager.js';
 import * as Trace from '../../models/trace/trace.js';
 import * as SourceMapsResolver from '../../models/trace_source_maps_resolver/trace_source_maps_resolver.js';
 import * as Workspace from '../../models/workspace/workspace.js';
@@ -484,8 +485,13 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
   readonly #targetManager: SDK.TargetManager.TargetManager;
   readonly #isolateManager: SDK.IsolateManager.IsolateManager;
 
-  constructor(resourceLoader: SDK.PageResourceLoader.ResourceLoader, targetManager: SDK.TargetManager.TargetManager,
-              isolateManager: SDK.IsolateManager.IsolateManager, traceModel?: Trace.TraceModel.Model) {
+  constructor(
+      resourceLoader: SDK.PageResourceLoader.ResourceLoader,
+      targetManager: SDK.TargetManager.TargetManager,
+      isolateManager: SDK.IsolateManager.IsolateManager,
+      commentManager: CommentManager.CommentManager.CommentManager,
+      traceModel?: Trace.TraceModel.Model,
+  ) {
     super('timeline');
     this.#resourceLoader = resourceLoader;
     this.#targetManager = targetManager;
@@ -563,7 +569,7 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
 
     this.createFileSelector();
 
-    this.flameChart = new TimelineFlameChartView(this);
+    this.flameChart = new TimelineFlameChartView(this, commentManager);
     this.element.addEventListener(
         'toggle-popover', event => this.flameChart.togglePopover((event as CustomEvent).detail));
 
@@ -720,11 +726,12 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
     resourceLoader: SDK.PageResourceLoader.ResourceLoader,
     targetManager: SDK.TargetManager.TargetManager,
     isolateManager: SDK.IsolateManager.IsolateManager,
+    commentManager: CommentManager.CommentManager.CommentManager,
     traceModel?: Trace.TraceModel.Model,
   }|undefined = undefined): TimelinePanel {
     if (opts) {
-      timelinePanelInstance =
-          new TimelinePanel(opts.resourceLoader, opts.targetManager, opts.isolateManager, opts.traceModel);
+      timelinePanelInstance = new TimelinePanel(opts.resourceLoader, opts.targetManager, opts.isolateManager,
+                                                opts.commentManager, opts.traceModel);
     }
 
     if (!timelinePanelInstance) {
@@ -955,6 +962,10 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
         // We also hide the sidebar - else if the user is viewing a trace and
         // then load/record another, the sidebar remains visible.
         this.#hideSidebar();
+        // Hide the SearchableView so Ctrl/Cmd-F cannot search a hidden trace
+        // and flame chart overlays (such as comment pins rendered on
+        // document.body) do not remain visible above the StatusDialog.
+        this.#searchableView.hideWidget();
         return;
       }
       default:
@@ -3180,6 +3191,7 @@ export class TimelinePanel extends TimelinePanelBase implements Client, Timeline
 
   static async executeRecordAndReload(): Promise<Trace.TraceModel.ParsedTrace> {
     await UI.ViewManager.ViewManager.instance().showView('timeline');
+    await SDK.TargetManager.TargetManager.instance().primaryPageTarget()?.pageAgent().invoke_bringToFront();
     const panelInstance = TimelinePanel.instance();
 
     const result: EventTypes[Events.RECORDING_COMPLETED] = await new Promise(resolve => {

@@ -11,7 +11,7 @@ import * as SDK from '../../core/sdk/sdk.js';
 import type * as CodeMirror from '../../third_party/codemirror.next/codemirror.next.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
-import {Directive, html, type LitTemplate, nothing, render} from '../../ui/lit/lit.js';
+import {AsyncDirective, Directive, html, type LitTemplate, nothing, render} from '../../ui/lit/lit.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
 import {ImagePreviewPopover} from './ImagePreviewPopover.js';
@@ -194,6 +194,50 @@ function highlight(highlighting: Highlighting|undefined, match: SDK.CSSPropertyP
   return html`${template}${highlightDirective(highlighting, match)}`;
 }
 
+class LazyEvaluationBlackboard {
+  #result?: LitTemplate;
+  callback?: (result: LitTemplate) => void;
+  readonly #asyncEvalCallback: () => Promise<LitTemplate|null>;
+
+  constructor(asyncEvalCallback: () => Promise<LitTemplate|null>) {
+    this.#asyncEvalCallback = asyncEvalCallback;
+  }
+
+  get result(): LitTemplate|undefined {
+    return this.#result;
+  }
+
+  set result(val: LitTemplate) {
+    if (this.#result === val) {
+      return;
+    }
+    this.#result = val;
+    this.callback?.(val);
+  }
+
+  readonly asyncEvalCallback = async(): Promise<boolean> => {
+    const result = await this.#asyncEvalCallback();
+    if (result) {
+      this.result = result;
+    }
+    return Boolean(result);
+  };
+}
+
+class LazyEvaluationDirective extends AsyncDirective.AsyncDirective {
+  render(
+      placeholder: LitTemplate,
+      blackboard: LazyEvaluationBlackboard,
+      ): LitTemplate {
+    blackboard.callback = result => {
+      if (this.isConnected) {
+        this.setValue(result);
+      }
+    };
+    return blackboard.result ?? placeholder;
+  }
+}
+const lazyEvaluation = AsyncDirective.directive(LazyEvaluationDirective);
 /**
  * This class is used to guide value tracing when passed to the Renderer. Tracing has two phases. First, substitutions
  * such as var() are applied step by step. In each step, all vars in the value are replaced by their definition until no
@@ -321,11 +365,19 @@ export class TracingContext {
 
   // After rendering the arguments of a function call, the TracingContext produced by TracingContext#evaluation need to
   // be passed here to determine whether the "current" function call should be evaluated or not. If so, the
-  // evaluation callback is run. The callback should return synchronously an array of Nodes as placeholder to be
-  // rendered immediately and optionally a callback for asynchronous updates of the placeholder nodes. The callback
-  // returns a boolean indicating whether the update was successful or not.
+  // evaluation callback is run. The callback returns a template or placeholder nodes to render immediately, and
+  // optionally an async callback that resolves to the evaluated template (or a boolean indicating whether the
+  // in-place placeholder update succeeded).
   applyEvaluation(children: TracingContext[],
-                  evaluation: () => ({placeholder: Node[], asyncEvalCallback?: () => Promise<boolean>})): Node[]|null {
+                  evaluation: () => {placeholder: Node[], asyncEvalCallback?: () => Promise<boolean>}): Node[]|null;
+  applyEvaluation(children: TracingContext[],
+                  evaluation: () => ({placeholder: LitTemplate, asyncEvalCallback?: () => Promise<boolean>} |
+                                     {template: LitTemplate, asyncEvalCallback?: () => Promise<LitTemplate|null>})):
+      LitTemplate|null;
+  applyEvaluation(children: TracingContext[],
+                  evaluation: () => ({placeholder: Node[] | LitTemplate, asyncEvalCallback?: () => Promise<boolean>} |
+                                     {template: LitTemplate, asyncEvalCallback?: () => Promise<LitTemplate|null>})):
+      Node[]|LitTemplate|null {
     if (this.#evaluationCount === 0 || children.some(child => child.#appliedEvaluations >= this.#evaluationCount)) {
       this.#setHasMoreEvaluations(true);
       children.forEach(child => this.#asyncEvalCallbacks.push(...child.#asyncEvalCallbacks));
@@ -333,9 +385,19 @@ export class TracingContext {
     }
     this.#setAppliedEvaluations(children.map(child => child.#appliedEvaluations).reduce((a, b) => Math.max(a, b), 0) +
                                 1);
-    const {placeholder, asyncEvalCallback} = evaluation();
-    this.#asyncEvalCallbacks.push(asyncEvalCallback);
-    return placeholder;
+    const result = evaluation();
+    if ('placeholder' in result) {
+      this.#asyncEvalCallbacks.push(result.asyncEvalCallback);
+      return result.placeholder;
+    }
+    if (!result.asyncEvalCallback) {
+      this.#asyncEvalCallbacks.push(result.asyncEvalCallback);
+      return result.template;
+    }
+
+    const blackboard = new LazyEvaluationBlackboard(result.asyncEvalCallback);
+    this.#asyncEvalCallbacks.push(blackboard.asyncEvalCallback);
+    return html`${lazyEvaluation(result.template, blackboard)}`;
   }
 
   #setHasMoreSubstitutions(): void {
@@ -398,13 +460,13 @@ export type CSSControlMap = Map<string, HTMLElement[]>;
  * for its text. This keeps modifications separate from `original.computedText()`, which stands for the result of
  * resolving var()s, stripping comments and the like.
  *
- * A `ComputedText` keeps only the last push of any given match. So to change a ValueEdit that was already pushed, set
- * its `value` and push it again.
+ * A function as `value` is called whenever the text is read. This is for renderers that put the text of their match
+ * together from parts that keep changing.
  **/
 class ValueEdit implements SDK.CSSPropertyParser.Match {
-  value: string;
+  value: string|(() => string);
 
-  constructor(readonly original: SDK.CSSPropertyParser.Match, value: string) {
+  constructor(readonly original: SDK.CSSPropertyParser.Match, value: string|(() => string)) {
     this.value = value;
   }
 
@@ -417,7 +479,7 @@ class ValueEdit implements SDK.CSSPropertyParser.Match {
   }
 
   computedText(): string {
-    return this.value;
+    return typeof this.value === 'string' ? this.value : this.value();
   }
 }
 
@@ -428,7 +490,7 @@ class ValueEdit implements SDK.CSSPropertyParser.Match {
  **/
 export class ValueUpdateTracking {
   readonly #text: SDK.CSSPropertyParser.ComputedText;
-  // A `ComputedText` keeps only the last push of any given edit, so a match needs to keep using the same edit.
+  // A match is pushed to the text once, later changes of it update its edit. See `#get` for how they get picked up.
   readonly #edits = new Map<SDK.CSSPropertyParser.Match, ValueEdit>();
   // The text spans the whole declaration, including the name of the property and the trailing ';}'. Offsets in it are
   // relative to the start of the declaration, whereas the AST that a renderer works on may be a subtree of it.
@@ -456,18 +518,93 @@ export class ValueUpdateTracking {
   }
 
   // Records that the text of `match` was changed to `value`. This replaces the change of `match` that was recorded
-  // before, if any.
-  recordEdit(match: SDK.CSSPropertyParser.Match, value: string): void {
-    const edit = this.#edits.get(match) ?? new ValueEdit(match, value);
-    edit.value = value;
+  // before, if any. A function is called every time the text is read.
+  recordEdit(match: SDK.CSSPropertyParser.Match, value: string|(() => string)): void {
+    const existing = this.#edits.get(match);
+    if (existing) {
+      existing.value = value;
+      return;
+    }
+    const edit = new ValueEdit(match, value);
     this.#edits.set(match, edit);
-    // Pushing the edit again supersedes its earlier push, which is how the new value gets picked up.
-    this.#text.push(edit, match.node.from - this.#declarationStart);
+    // A match of the whole declaration stands for its value, which starts after the name of the property.
+    const offset = match.node.name === 'Declaration' ? this.#valueBegin : match.node.from - this.#declarationStart;
+    this.#text.push(edit, offset);
   }
 
   // The text of the value with the recorded changes applied.
   valueText(): string {
-    return this.#text.get(this.#valueBegin, this.#valueEnd);
+    return this.#get(this.#valueBegin, this.#valueEnd);
+  }
+
+  getEdit(match: SDK.CSSPropertyParser.Match): string|undefined {
+    return this.#edits.get(match)?.computedText();
+  }
+
+  // The text of the nodes `from` to `to` with the recorded changes applied, like `SyntaxTree.textRange` for the authored
+  // text.
+  textRange(from: CodeMirror.SyntaxNode|undefined, to: CodeMirror.SyntaxNode|undefined): string {
+    if (!from || !to) {
+      return '';
+    }
+    return this.#get(from.from - this.#declarationStart, to.to - this.#declarationStart);
+  }
+
+  // A `ComputedText` remembers the text of a chunk after reading it for the first time, which would hide later changes
+  // of an edit. Asking the edits for their text through the substitution hook avoids that.
+  #get(begin: number, end: number): string {
+    return this.#text.get(begin, end, match => match.computedText?.() ?? null);
+  }
+}
+
+export class ValueEditEvent extends CustomEvent<string> {
+  static readonly eventName = 'valueedit';
+
+  constructor(value: string) {
+    super(ValueEditEvent.eventName, {bubbles: true, detail: value});
+  }
+}
+
+interface EditableContentViewInput {
+  editedValue: string|null;
+  onValueEdit: (event: ValueEditEvent) => void;
+}
+
+type EditableContentView = (input: EditableContentViewInput, output: undefined, target: HTMLElement|DocumentFragment) =>
+    void;
+
+const EDITABLE_CONTENT_DEFAULT_VIEW: EditableContentView = (input, _output, target) => {
+  render(html`<slot name="icon" @valueedit=${input.onValueEdit}></slot>${input.editedValue ?? html`<slot></slot>`}`,
+         target);
+};
+
+/**
+ * Hosts a value part that can be edited through an inline swatch or icon.
+ *
+ * The swatch or icon goes into the `icon` slot, and the initial rendered AST nodes go into the default slot. When the
+ * swatch or icon dispatches a `ValueEditEvent`, the default slot is replaced with the new text while the `icon` slot
+ * stays in place.
+ **/
+export class EditableContent extends UI.Widget.Widget<DocumentFragment> {
+  #editedValue: string|null = null;
+  readonly #view: EditableContentView;
+
+  constructor(element?: HTMLElement, view: EditableContentView = EDITABLE_CONTENT_DEFAULT_VIEW) {
+    super(element, {useShadowDom: 'pure'});
+    this.element.classList.remove('widget');
+    this.#view = view;
+    // Render synchronously so that `<slot name="icon">` is in the DOM before synchronous callers dispatch edits.
+    this.performUpdate();
+  }
+
+  #onValueEdit = (event: ValueEditEvent): void => {
+    event.stopPropagation();
+    this.#editedValue = event.detail;
+    this.performUpdate();
+  };
+
+  override performUpdate(): void {
+    this.#view({editedValue: this.#editedValue, onValueEdit: this.#onValueEdit}, undefined, this.contentElement);
   }
 }
 
@@ -482,9 +619,9 @@ export class RenderingContext {
   }
 
   // Records that a renderer changed the text of `match` to `value`, e.g. because the user picked a color, so that the
-  // change becomes part of the text of the property. Does nothing if the context doesn't track changes, e.g. for value
-  // traces.
-  recordEdit(match: SDK.CSSPropertyParser.Match, value: string): void {
+  // change becomes part of the text of the property. A function is called every time the text of the property is put
+  // together. Does nothing if the context doesn't track changes, e.g. for value traces.
+  recordEdit(match: SDK.CSSPropertyParser.Match, value: string|(() => string)): void {
     this.edits?.recordEdit(match, value);
   }
 

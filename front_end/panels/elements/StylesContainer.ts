@@ -4,6 +4,7 @@
 
 import type * as SDK from '../../core/sdk/sdk.js';
 import type * as TextUtils from '../../core/text_utils/text_utils.js';
+import type * as ChangeTracker from '../../models/change_tracker/change_tracker.js';
 import type * as ComputedStyle from '../../models/computed_style/computed_style.js';
 import type * as InlineEditor from '../../ui/legacy/components/inline_editor/inline_editor.js';
 import type * as Components from '../../ui/legacy/components/utils/utils.js';
@@ -20,6 +21,7 @@ export interface StylesContainer {
   readonly sectionByElement: WeakMap<Node, StylePropertiesSection>;
   readonly element: HTMLElement;
   readonly linkifier: Components.Linkifier.Linkifier;
+  readonly changeTracker?: ChangeTracker.ChangeTracker.ChangeTracker;
 
   swatchPopoverHelper(): InlineEditor.SwatchPopoverHelper.SwatchPopoverHelper;
   node(): SDK.DOMModel.DOMNode|null;
@@ -34,9 +36,8 @@ export interface StylesContainer {
   forceUpdate(): void;
   hideAllPopovers(): void;
 
-  getVariablePopoverContents(
-      matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles, variableName: string,
-      computedValue: string|null): ElementsComponents.CSSVariableValueView.CSSVariableValueView;
+  getRegisteredPropertyDetails(matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles, variableName: string):
+      ElementsComponents.CSSVariableValueView.RegisteredPropertyDetails|undefined;
   getVariableParserError(matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles, variableName: string):
       ElementsComponents.CSSVariableValueView.CSSVariableParserError|null;
   jumpToFunctionDefinition(functionName: string, treeScopeDistance: number): void;

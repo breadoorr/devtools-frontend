@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import '../../ui/components/spinners/spinners.js';
 import '../../ui/components/tooltips/tooltips.js';
 
+import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as Protocol from '../../generated/protocol.js';
@@ -38,6 +40,11 @@ const UIStrings = {
    */
   sentCheckmark: 'Sent checkmark',
   /**
+   * @description Text next to a spinner in the comment thread header indicating that the agent has picked up the
+   * comments and is working on them.
+   */
+  working: 'Working',
+  /**
    * @description Label for the agent response section in the comment thread.
    */
   response: 'Response:',
@@ -58,6 +65,17 @@ const UIStrings = {
    * @description aria-label for the comment text area.
    */
   commentInputAriaLabel: 'Comment input',
+  /**
+   * @description Placeholder text for the comment text area, explaining the keyboard shortcut that queues a comment
+   * (saves it locally so it is sent to the agent together with the next comment).
+   * @example {Ctrl} PH1
+   */
+  queueCommentsPlaceholder: '{PH1} + \u21b5 to queue comments',
+  /**
+   * @description Banner text shown at the bottom of a comment thread when the element the comment was
+   * attached to has been removed and can no longer be found.
+   */
+  elementNoLongerAvailable: 'The element is no longer available',
 } as const;
 
 const UIStringsNotTranslate = {
@@ -84,10 +102,16 @@ export interface ViewInput {
   title: Title;
   comments: CommentManager.CommentManager.Comment[];
   commentText: string;
+  /** Placeholder for the comment text area, including the platform-specific queue shortcut. */
+  placeholder: string;
   /** Whether Cmd (Mac) or Ctrl (other platforms) is currently held, switching submit to "queue". */
   isQueueModifierPressed: boolean;
+  /** True when the element the thread is anchored to has been removed. */
+  elementRemoved: boolean;
   textAreaRef: Lit.Directives.Ref<HTMLTextAreaElement>;
   status: CommentManager.CommentManager.CommentThreadStatus;
+  /** Whether the thread has been taken by the agent. */
+  transmitted: boolean;
   isEditing: boolean;
   onAddComment: (text: string) => void;
   onQueueComment: (text: string) => void;
@@ -133,6 +157,16 @@ export const DEFAULT_VIEW = (input: ViewInput, _output: ViewOutput, target: HTML
 
     switch (input.status) {
       case 'SENT_TO_AGENT':
+        if (input.transmitted) {
+          // clang-format off
+          return html`
+            <div class="working-status">
+              <devtools-spinner></devtools-spinner>
+              <span>${i18nString(UIStrings.working)}</span>
+            </div>
+          `;
+          // clang-format on
+        }
         // clang-format off
         return html`
           <div class="sent-status">
@@ -201,6 +235,7 @@ export const DEFAULT_VIEW = (input: ViewInput, _output: ViewOutput, target: HTML
             input.onQueueModifierChange(UI.KeyboardShortcut.KeyboardShortcut.eventHasCtrlEquivalentKey(event))}
           @blur=${() => input.onQueueModifierChange(false)}
           jslog=${VisualLogging.textField('comments-input').track({keydown: 'Enter'})}
+          placeholder=${input.placeholder}
         ></textarea>
         <div class="footer">
           <devtools-icon
@@ -231,7 +266,7 @@ export const DEFAULT_VIEW = (input: ViewInput, _output: ViewOutput, target: HTML
             ${buttonText}
           </devtools-button>
         </div>
-      ` : html`${input.comments.map(comment => comment.author === 'DEVELOPER' ? html`
+      ` : html`<div class="thread-body">${input.comments.map(comment => comment.author === 'DEVELOPER' ? html`
           <div class="comment-text"
             @click=${() => {input.onSetEditMode(true);}}
           >
@@ -248,8 +283,14 @@ export const DEFAULT_VIEW = (input: ViewInput, _output: ViewOutput, target: HTML
               )}
             </div>
           </div>
-        `)}
+        `)}</div>
       `}
+
+      ${input.elementRemoved ? html`
+        <div class="element-removed-banner" role="status">
+          <span>${i18nString(UIStrings.elementNoLongerAvailable)}</span>
+        </div>
+      ` : Lit.nothing}
     </div>
   `, target);
   // clang-format on
@@ -262,7 +303,9 @@ export class CommentThreadWidget extends UI.Widget.Widget {
   #comments: CommentManager.CommentManager.Comment[] = [];
   #commentText = '';
   #status: CommentManager.CommentManager.CommentThreadStatus = 'DRAFT';
+  #transmitted = false;
   #isQueueModifierPressed = false;
+  #elementRemoved = false;
   #textAreaRef = createRef<HTMLTextAreaElement>();
   #view: View;
   #isEditing: boolean = false;
@@ -298,6 +341,29 @@ export class CommentThreadWidget extends UI.Widget.Widget {
   set status(commentStatus: CommentManager.CommentManager.CommentThreadStatus) {
     this.#status = commentStatus;
     this.requestUpdate();
+  }
+
+  set transmitted(transmitted: boolean) {
+    if (this.#transmitted === transmitted) {
+      return;
+    }
+    this.#transmitted = transmitted;
+    this.requestUpdate();
+  }
+
+  /**
+   * When true, shows a banner indicating that the element the thread is anchored to has been removed.
+   */
+  set elementRemoved(elementRemoved: boolean) {
+    if (this.#elementRemoved === elementRemoved) {
+      return;
+    }
+    this.#elementRemoved = elementRemoved;
+    this.requestUpdate();
+  }
+
+  get elementRemoved(): boolean {
+    return this.#elementRemoved;
   }
 
   #onSetEditMode = (value: boolean): void => {
@@ -358,9 +424,12 @@ export class CommentThreadWidget extends UI.Widget.Widget {
       title: this.title,
       comments: this.#comments,
       commentText: this.#commentText,
+      placeholder: i18nString(UIStrings.queueCommentsPlaceholder, {PH1: Host.Platform.isMac() ? '⌘' : 'Ctrl'}),
       isQueueModifierPressed: this.#isQueueModifierPressed,
+      elementRemoved: this.#elementRemoved,
       textAreaRef: this.#textAreaRef,
       status: this.#status,
+      transmitted: this.#transmitted,
       onAddComment: this.#handleAddComment,
       onQueueComment: this.#handleQueueComment,
       onCommentTextChange: this.#handleCommentTextChange,

@@ -73,13 +73,19 @@ class NodeWorker implements Api.HostRuntime.Worker {
   }
 
   set onerror(listener: (event: unknown) => void) {
-    void this.#workerPromise.then(worker => {
-      worker.on('error', (error: Error) => {
-        if (!this.#disposed) {
-          listener({type: 'error', ...error});
-        }
-      });
-    });
+    void this.#workerPromise.then(
+        worker => {
+          worker.on('error', (error: Error) => {
+            if (!this.#disposed) {
+              listener({type: 'error', ...error, message: error.message, error});
+            }
+          });
+        },
+        (error: Error) => {
+          if (!this.#disposed) {
+            listener({type: 'error', ...error, message: error.message, error});
+          }
+        });
   }
 }
 
@@ -137,6 +143,7 @@ export const HOST_RUNTIME: Api.HostRuntime.HostRuntime = {
     return 1;
   },
   async saveScreenshot(_options: Api.HostRuntime.ScreenshotOptions): Promise<void>{},
+  async copyScreenshot(_options: Api.HostRuntime.ScreenshotOptions): Promise<void>{},
   revokeLastScreenshotUrl(): void{},
   async loadTextFile(url: URL): Promise<string> {
     return await Fs.promises.readFile(Url.fileURLToPath(url), 'utf-8');

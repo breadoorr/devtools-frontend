@@ -119,6 +119,7 @@ export class BrowserWrapper {
 
 export interface BrowserSettings {
   chromeUsername?: string;
+  chromePassword?: string;
   enabledFeatures: string[];
   disabledFeatures: string[];
   extensions?: string[];
@@ -141,7 +142,7 @@ export class Launcher {
       if (settings.chromeUsername) {
         const loginPage = await wrapper.browser.newPage();
         try {
-          await chromeLogin(loginPage, settings.chromeUsername);
+          await chromeLogin(loginPage, settings.chromeUsername, settings.chromePassword);
           await configureDevToolsPreferences(loginPage);
         } finally {
           await loginPage.close().catch(() => {});
@@ -190,8 +191,11 @@ export class Launcher {
     }
 
     // CDP commands in e2e and interaction should not generally take
-    // more than 20 seconds, but performance tests might require more time.
-    const protocolTimeout = TestConfig.debug ? 0 : TestConfig.isPerfTest ? 120_000 : 20_000;
+    // more than 20 seconds, but performance and AI eval tests might require more time.
+    const protocolTimeout = TestConfig.debug ? 0 :
+        TestConfig.isPerfTest                ? 120_000 :
+        TestConfig.isAiEvalTest              ? 60_000 :
+                                               20_000;
     const executablePath = TestConfig.chromeBinary;
     const headless = TestConfig.headless;
 

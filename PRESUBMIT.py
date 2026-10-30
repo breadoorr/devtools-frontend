@@ -329,8 +329,6 @@ def CheckGeneratedFiles(input_api, output_api):
     scripts_generated_output_path = input_api.os_path.join(
         input_api.PresubmitLocalPath(), 'front_end', 'generated')
 
-    generated_aria_path = input_api.os_path.join(scripts_build_path,
-                                                 'generate_aria.py')
     generated_supported_css_path = input_api.os_path.join(
         scripts_build_path, 'generate_supported_css.py')
     generated_deprecation_path = input_api.os_path.join(
@@ -348,7 +346,6 @@ def CheckGeneratedFiles(input_api, output_api):
         blink_directory_path,
         input_api.os_path.join(input_api.PresubmitLocalPath(), 'third_party',
                                'pyjson5'),
-        generated_aria_path,
         generated_supported_css_path,
         generated_deprecation_path,
         concatenate_protocols_path,
@@ -375,8 +372,12 @@ def CheckL10nStrings(input_api, output_api):
     devtools_front_end = input_api.os_path.join(devtools_root, 'front_end')
     script_path = input_api.os_path.join(devtools_root, 'third_party', 'i18n',
                                          'check-strings.js')
-    affected_front_end_files = _GetAffectedFiles(
-        input_api, [devtools_front_end, script_path], [], ['.js', '.ts'])
+    affected_front_end_files = [
+        file_name for file_name in
+        _GetAffectedFiles(input_api, [devtools_front_end, script_path], ['D'],
+                          ['.js', '.ts']) if file_name == script_path
+        or 'UIStrings' in input_api.ReadFile(file_name)
+    ]
     if len(affected_front_end_files) == 0:
         return []
     return _CheckWithNodeScript(input_api,
@@ -416,9 +417,22 @@ def CheckForTooLargeFiles(input_api, output_api):
 
 
 def CheckObsoleteScreenshotGoldens(input_api, output_api):
-    script_path = input_api.os_path.join(input_api.PresubmitLocalPath(),
-                                         'scripts', 'test',
+    devtools_root = input_api.PresubmitLocalPath()
+    script_path = input_api.os_path.join(devtools_root, 'scripts', 'test',
                                          'check_obsolete_goldens.js')
+    # Only unit tests, goldens, and the script itself decide which goldens are
+    # obsolete. Deleted files count, because a deleted test can leave goldens
+    # behind.
+    # LINT.IfChange(ObsoleteGoldensPaths)
+    affected_unit_tests = _GetAffectedFiles(
+        input_api, [input_api.os_path.join(devtools_root, 'front_end')], [],
+        ['.test.ts'])
+    affected_goldens = _GetAffectedFiles(input_api, [
+        input_api.os_path.join(devtools_root, 'test', 'goldens'), script_path
+    ], [], [])
+    # LINT.ThenChange(/scripts/test/check_obsolete_goldens.js:ObsoleteGoldensPaths)
+    if len(affected_unit_tests) == 0 and len(affected_goldens) == 0:
+        return []
     return _CheckWithNodeScript(input_api,
                                 output_api,
                                 script_path,
@@ -440,59 +454,81 @@ def CheckTestExpectations(input_api, output_api):
         message='Test expectations')
 
 
-_UPDATE_NODE_DEPENDENCIES_FOOTER = 'Update-Node-Dependencies'
+_SKIP_NODE_MODULES_CHECK_FOOTER = 'Skip-Node-Modules-Check'
+
+
+def _ImportManageNodeDeps(input_api):
+    original_sys_path = sys.path
+    try:
+        sys.path = sys.path + [
+            input_api.os_path.join(input_api.PresubmitLocalPath(), 'scripts',
+                                   'deps')
+        ]
+        import manage_node_deps
+        return manage_node_deps
+    finally:
+        sys.path = original_sys_path
+
 
 def CheckNodeModules(input_api, output_api):
-    files = ['.clang-format', 'OWNERS', 'README.md']
+    """node_modules/ is the archive pinned in DEPS, extracted by gclient sync.
+
+    Checks that it is present, that the DEPS object is content-addressed and
+    that the files the archive is built from change together with DEPS.
+    """
+    if input_api.is_committing:
+        report = output_api.PresubmitError
+    else:
+        report = output_api.PresubmitPromptWarning
+
+    node_modules = input_api.os_path.join(input_api.PresubmitLocalPath(),
+                                          'node_modules')
+    if not input_api.os_path.isdir(node_modules):
+        return [
+            report('node_modules/ is missing. Run `gclient sync` to '
+                   'download it.')
+        ]
+
+    manage_node_deps = _ImportManageNodeDeps(input_api)
+    affected = {
+        f.LocalPath().replace(input_api.os_path.sep, '/'): f
+        for f in input_api.AffectedFiles()
+    }
+    package_json = affected.get('package.json')
+    inputs = manage_node_deps.archive_inputs_changed(
+        affected.keys(),
+        '\n'.join(package_json.OldContents()) if package_json else None,
+        '\n'.join(package_json.NewContents()) if package_json else None)
+
     results = []
-    for file in files:
-        file_path = input_api.os_path.join(input_api.PresubmitLocalPath(),
-                                           'node_modules', file)
-        if not Path(file_path).is_file():
-            results.extend([
-                output_api.PresubmitError(
-                    "node_modules/%s is missing. Use `scripts/tools/dt.py install-deps` to re-create it."
-                    % file)
-            ])
+    archive_changed = False
+    deps = affected.get('DEPS')
+    if deps:
+        old_deps = '\n'.join(deps.OldContents())
+        new_deps = '\n'.join(deps.NewContents())
+        results.extend(
+            output_api.PresubmitError(problem)
+            for problem in manage_node_deps.check_deps_entry(new_deps))
+        archive_changed = manage_node_deps.deps_entry_changed(
+            old_deps, new_deps)
 
-    node_module_files = _GetAffectedFiles(input_api, [
-        input_api.os_path.join(input_api.PresubmitLocalPath(), 'node_modules')
-    ], [], [])
-
-    if len(node_module_files) == 0:
+    if input_api.change.GitFootersFromDescription().get(
+            _SKIP_NODE_MODULES_CHECK_FOOTER):
         return results
 
-    reasons = input_api.change.GitFootersFromDescription().get(
-        _UPDATE_NODE_DEPENDENCIES_FOOTER, [])
-
-    if len(reasons):
-        if ''.join(reasons).strip() == '':
-            return [
-                output_api.PresubmitError(
-                    '{key} is specified without the reason. Please provide the reason '
-                    'in "{key}: <reason>"'.format(
-                        key=_UPDATE_NODE_DEPENDENCIES_FOOTER))
-            ]
-        input_api.logging.info('node_modules check is being ignored')
-        return []
-
-    # Fail on CQ when checking diffs.
-    # Warn locally or when checking the whole tree (due to legacy headers).
-    if input_api.is_committing and not input_api.no_diffs:
-        report_type = output_api.PresubmitError
-    else:
-        report_type = output_api.PresubmitPromptWarning
-
-    message = (
-        "{key}: <reason> footer must be present.\n".format(
-            key=_UPDATE_NODE_DEPENDENCIES_FOOTER) +
-        "This is third party code and should not be modified manually.\n" +
-        "`node_modules` are mainly used in testing infra\n" +
-        "For bug fixes and features usually you should not need this change.\n"
-        + "Was this change intentional?")
-
-    results.extend([report_type(message)])
-
+    if inputs and not archive_changed:
+        results.append(
+            report('%s changed but the node_modules archive in DEPS did '
+                   'not. Run `./dt install-deps --upload`, or add a '
+                   '"%s: <reason>" footer if no new archive is needed.' %
+                   (', '.join(inputs), _SKIP_NODE_MODULES_CHECK_FOOTER)))
+    elif (archive_changed and not inputs
+          and 'scripts/deps/manage_node_deps.py' not in affected):
+        results.append(
+            output_api.PresubmitPromptWarning(
+                'The node_modules archive in DEPS changed, but none of '
+                'package.json, package-lock.json, npm_exclude.txt or the '
+                'patches did. Was this intentional?'))
     return results
 
 
@@ -601,6 +637,141 @@ def CheckVisualLoggingNoContextValueRemoval(input_api, output_api):
             locations=[
                 output_api.PresubmitResultLocation(file_path=local_path)
             ],
+        )
+    ]
+
+
+_EXEMPT_THIRD_PARTY_LICENSE_PACKAGES = {
+    'vscode.web-custom-data',
+}
+
+
+def CheckThirdPartyAndSvgAssets(input_api, output_api):
+    """Verify front_end/third_party/ package metadata and front_end/Images/src/ SVG icon hygiene."""
+    devtools_root = input_api.PresubmitLocalPath()
+    third_party_prefix = input_api.os_path.join(
+        'front_end', 'third_party') + input_api.os_path.sep
+    images_src_prefix = input_api.os_path.join('front_end', 'Images',
+                                               'src') + input_api.os_path.sep
+
+    checked_packages = set()
+    errors = []
+
+    for f in input_api.AffectedFiles():
+        # Check both added and modified files (but not deleted files).
+        if f.Action() not in ('A', 'M'):
+            continue
+
+        local_path = f.LocalPath()
+
+        if local_path.startswith(third_party_prefix):
+            rel_path = local_path[len(third_party_prefix):]
+            parts = rel_path.split(input_api.os_path.sep)
+            if len(parts) < 2:
+                continue
+            pkg = parts[0]
+            if pkg in checked_packages:
+                continue
+            checked_packages.add(pkg)
+
+            pkg_dir = input_api.os_path.join(devtools_root, 'front_end',
+                                             'third_party', pkg)
+            if not input_api.os_path.isdir(pkg_dir):
+                continue
+
+            readme_path = input_api.os_path.join(pkg_dir, 'README.chromium')
+            if not input_api.os_path.isfile(readme_path):
+                errors.append(
+                    f'front_end/third_party/{pkg}/README.chromium is missing.')
+            else:
+                readme_text = Path(readme_path).read_text(encoding='utf-8')
+                if 'Update Mechanism:' not in readme_text:
+                    errors.append(
+                        f'front_end/third_party/{pkg}/README.chromium must include an "Update Mechanism:" field.'
+                    )
+
+            if pkg not in _EXEMPT_THIRD_PARTY_LICENSE_PACKAGES:
+                license_path = input_api.os_path.join(pkg_dir, 'LICENSE')
+                pkg_license_path = input_api.os_path.join(
+                    pkg_dir, 'package', 'LICENSE')
+                license_md_path = input_api.os_path.join(pkg_dir, 'LICENSE.md')
+                has_license = input_api.os_path.isfile(
+                    license_path) or input_api.os_path.isfile(pkg_license_path)
+                if input_api.os_path.isfile(license_md_path):
+                    errors.append(
+                        f'front_end/third_party/{pkg}/ uses LICENSE.md; name the license file "LICENSE" instead.'
+                    )
+                elif not has_license:
+                    errors.append(
+                        f'front_end/third_party/{pkg}/ is missing a LICENSE file.'
+                    )
+
+        elif local_path.startswith(images_src_prefix) and local_path.endswith(
+                '.svg'):
+            svg_text = '\n'.join(f.NewContents())
+            svg_tag_match = input_api.re.search(r'<svg\b[^>]*>', svg_text)
+            if not svg_tag_match:
+                continue
+            svg_tag = svg_tag_match.group(0)
+
+            def _CanonicalizeFill(fill):
+                fill = fill.strip().lower()
+                return '#000' if fill in ('#000', '#000000', 'black') else fill
+
+            fills = [
+                _CanonicalizeFill(fill) for fill in input_api.re.findall(
+                    r'''\bfill=["']([^"']+)["']''', svg_text)
+                if fill.strip().lower() != 'none'
+            ]
+            has_gradient_or_defs = bool(
+                input_api.re.search(
+                    r'<(linearGradient|radialGradient|style)\b|url\(#',
+                    svg_text))
+            distinct_fills = set(fills)
+
+            width_match = input_api.re.search(
+                r'''\bwidth=["'](\d+)(?:px)?["']''', svg_tag)
+            height_match = input_api.re.search(
+                r'''\bheight=["'](\d+)(?:px)?["']''', svg_tag)
+            viewbox_match = input_api.re.search(
+                r'''\bviewBox=["']([^"']+)["']''', svg_tag)
+
+            # Skip multi-color illustrations, gradient illustrations, or large non-icon SVGs.
+            if has_gradient_or_defs or len(distinct_fills) > 1:
+                continue
+            if width_match and height_match:
+                w = int(width_match.group(1))
+                h = int(height_match.group(1))
+                if w != h or w > 24:
+                    continue
+
+            if not viewbox_match:
+                errors.append(
+                    f'{local_path}: SVG icon is missing a viewBox attribute (expected viewBox="0 0 20 20").'
+                )
+            else:
+                normalized_viewbox = ' '.join(
+                    input_api.re.split(r'[\s,]+',
+                                       viewbox_match.group(1).strip()))
+                if normalized_viewbox not in ('0 0 20 20', '0 0 16 16',
+                                              '0 0 24 24', '0 -960 960 960'):
+                    errors.append(
+                        f'{local_path}: SVG icon has viewBox="{viewbox_match.group(1)}" (expected "0 0 20 20").'
+                    )
+
+            invalid_fills = [fill for fill in distinct_fills if fill != '#000']
+            if invalid_fills:
+                errors.append(
+                    f'{local_path}: Monochromatic SVG icon uses non-black fill {invalid_fills[0]} (expected #000 or black).'
+                )
+
+    if not errors:
+        return []
+
+    return [
+        output_api.PresubmitError(
+            'Third-party package or SVG asset hygiene check failed:',
+            long_text='\n'.join(errors) + '\n',
         )
     ]
 

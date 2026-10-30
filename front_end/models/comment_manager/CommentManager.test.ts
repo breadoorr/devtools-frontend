@@ -4,6 +4,9 @@
 
 import {assert} from 'chai';
 import {afterEach, beforeEach, describe, it} from 'mocha';
+import sinon from 'sinon';
+
+import * as Host from '../../core/host/host.js';
 
 import * as CommentManager from './comment_manager.js';
 
@@ -99,23 +102,6 @@ describe('CommentManager', () => {
     assert.lengthOf(threadChangedEvents, 2);
   });
 
-  it('assigns incrementing index to saved threads', () => {
-    const anchor: CommentManager.CommentManager.CommentAnchorSignature = {
-      vePath: 'Panel: elements > TreeItem: rule',
-      textSignature: 'color: red;',
-    };
-
-    const thread1 = manager.createCommentThread(anchor, 'First comment');
-    assert.strictEqual(thread1.index, 1);
-    thread1.save();
-    assert.strictEqual(thread1.index, 1);
-
-    const thread2 = manager.createCommentThread(anchor, 'Second comment');
-    assert.strictEqual(thread2.index, 2);
-    thread2.save();
-    assert.strictEqual(thread2.index, 2);
-  });
-
   it('creates and retrieves comment threads with TimelineAnchorSignature', () => {
     const anchor: CommentManager.CommentManager.CommentAnchorSignature = {
       vePath: 'Panel: timeline > FlameChart: main',
@@ -183,6 +169,18 @@ describe('CommentManager', () => {
     assert.isEmpty(thread.comments);
     assert.isTrue(thread.isGeneratedComment);
     assert.strictEqual(thread.status, 'DRAFT');
+  });
+
+  it('creates comment thread with empty string text', () => {
+    const anchor: CommentManager.CommentManager.CommentAnchorSignature = {
+      vePath: 'Panel: elements > TreeOutline > TreeItem',
+      textSignature: 'div.header',
+    };
+    const thread = manager.createCommentThread(anchor, '');
+
+    assert.isNotNull(thread);
+    assert.lengthOf(thread.comments, 1);
+    assert.strictEqual(thread.comments[0].text, '');
   });
 
   it('returns undefined for non-existent comment thread ID', () => {
@@ -287,6 +285,25 @@ describe('CommentManager', () => {
     assert.lengthOf(manager.takeComments(), 0);
   });
 
+  it('dispatches COMMENT_THREADS_CHANGED when takeComments() marks threads as transmitted', () => {
+    const anchor: CommentManager.CommentManager.CommentAnchorSignature = {
+      vePath: 'Panel: elements > TreeItem: rule',
+      textSignature: 'color: red;',
+    };
+    const thread = manager.createCommentThread(anchor, 'Comment', 'DEVELOPER');
+    thread.sendToAgent();
+
+    const changedSpy = sinon.spy();
+    manager.addEventListener(CommentManager.CommentManager.Events.COMMENT_THREADS_CHANGED, changedSpy);
+
+    manager.takeComments();
+    sinon.assert.calledOnce(changedSpy);
+
+    // Nothing new to take, so no further change is dispatched.
+    manager.takeComments();
+    sinon.assert.calledOnce(changedSpy);
+  });
+
   it('supports timeline anchor signatures with traceId', () => {
     const anchor: CommentManager.CommentManager.CommentAnchorSignature = {
       vePath: 'Panel: timeline > FlameChart: main',
@@ -302,5 +319,70 @@ describe('CommentManager', () => {
     const thread = manager.createCommentThread(anchor, 'Timeline comment');
     assert.strictEqual(thread.anchor.timeline?.traceId, 'trace-12345');
     assert.strictEqual(thread.anchor.timeline?.traceEventKey, 'r-0');
+  });
+});
+
+describe('CommentManager UMA', () => {
+  const anchor: CommentManager.CommentManager.CommentAnchorSignature = {
+    vePath: 'Panel: elements > TreeItem: rule',
+  };
+
+  let manager: CommentManager.CommentManager.CommentManager;
+  let commentSharedWithAgent: sinon.SinonStub;
+  let changeSharedWithAgent: sinon.SinonStub;
+  let commentResolved: sinon.SinonStub;
+
+  beforeEach(() => {
+    manager = new CommentManager.CommentManager.CommentManager();
+    commentSharedWithAgent = sinon.stub(Host.userMetrics, 'commentSharedWithAgent');
+    changeSharedWithAgent = sinon.stub(Host.userMetrics, 'changeSharedWithAgent');
+    commentResolved = sinon.stub(Host.userMetrics, 'commentResolved');
+  });
+
+  afterEach(() => {
+    manager.clear();
+  });
+
+  it('records shared comment and change counts when threads are taken by the agent', () => {
+    manager.createCommentThread(anchor).sendToAgent('Comment 1');
+    manager.createCommentThread(anchor).sendToAgent('Comment 2');
+    manager.createCommentThread(anchor, 'Change 1', 'DEVELOPER', true).sendToAgent();
+    manager.createCommentThread(anchor).save('Queued, not sent');
+
+    assert.lengthOf(manager.takeComments(), 3);
+
+    sinon.assert.calledOnceWithExactly(commentSharedWithAgent, 2);
+    sinon.assert.calledOnceWithExactly(changeSharedWithAgent, 1);
+  });
+
+  it('does not record shared counts when nothing is taken', () => {
+    manager.createCommentThread(anchor).sendToAgent('Comment');
+    manager.takeComments();
+    commentSharedWithAgent.resetHistory();
+
+    assert.isEmpty(manager.takeComments());
+
+    sinon.assert.notCalled(commentSharedWithAgent);
+    sinon.assert.notCalled(changeSharedWithAgent);
+  });
+
+  it('records CommentResolvedByAgent once per thread', () => {
+    const thread = manager.createCommentThread(anchor);
+    thread.sendToAgent('Comment');
+
+    assert.isTrue(manager.resolveCommentThread(thread.id, 'Done'));
+    assert.isTrue(manager.resolveCommentThread(thread.id, 'Done again'));
+    assert.isFalse(manager.resolveCommentThread('unknown-id'));
+
+    sinon.assert.calledOnceWithExactly(commentResolved, 'Agent', 1);
+  });
+
+  it('records CommentResolvedByAgent for generated change threads', () => {
+    const thread = manager.createCommentThread(anchor, 'Change 1', 'DEVELOPER', true);
+    thread.sendToAgent();
+
+    assert.isTrue(manager.resolveCommentThread(thread.id, 'Done'));
+
+    sinon.assert.calledOnceWithExactly(commentResolved, 'Agent', 1);
   });
 });

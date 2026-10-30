@@ -18,6 +18,13 @@ import {getDefaultOtaAccount} from './helpers/eval-environment.js';
 import {EvalLogger} from './report/eval-logger.js';
 import {finalizeEvalTask, handleTaskFailure} from './report/eval-task-recorder.js';
 import {
+  evaluateTrajectory,
+  formatStoreResults,
+  type ItEval,
+  printResults,
+  ResultStore,
+} from './report/evaluators.js';
+import {
   generateRunId,
   PROJECT_ID,
   type TaskStatus,
@@ -29,9 +36,16 @@ import {createTempEvalDir, type Step, TrajectoryBuilder} from './report/trajecto
 
 export type AiAssistanceContext = NonNullable<AiAssistance.ExternalHandler.ExternalAIRequestOptions['context']>;
 
+// Eval target type used when a test's evalConfig does not set `type`.
+const DEFAULT_EVAL_TYPE = 'eval';
+// Agent name reported in run_started.json when a run contains eval tests of several types.
+const MIXED_TARGETS_AGENT = 'devtools-ai-evals';
+
 export interface AiEvalConfig {
+  type?: string;
   label: string;
   taskId: string;
+  evals?: ItEval[];
 }
 
 export interface ExecutePromptOptions {
@@ -40,8 +54,10 @@ export interface ExecutePromptOptions {
 }
 
 export class EvalTaskHandle {
+  readonly type: string;
   readonly taskId: string;
   readonly label: string;
+  readonly evals: ItEval[];
   readonly isConfigured: boolean;
   readonly startTime: number = performance.now();
   readonly trajectoryBuilder: TrajectoryBuilder;
@@ -51,12 +67,18 @@ export class EvalTaskHandle {
   failureError?: string;
 
   constructor(config: AiEvalConfig, devToolsPage: DevToolsPage, logger: EvalLogger, isConfigured = true) {
+    this.type = config.type ?? DEFAULT_EVAL_TYPE;
     this.taskId = config.taskId;
     this.label = config.label;
+    this.evals = [...(config.evals ?? [])];
     this.isConfigured = isConfigured;
     this.trajectoryBuilder = new TrajectoryBuilder({taskId: this.taskId});
     this.#devToolsPage = devToolsPage;
     this.#logger = logger;
+  }
+
+  itEval(config: ItEval): void {
+    this.evals.push(config);
   }
 
   async executePrompt(options: ExecutePromptOptions): Promise<Step[]> {
@@ -90,11 +112,16 @@ export class AiEvalStateProvider extends StateProvider {
   #logger = new EvalLogger();
   #taskStatuses: TaskStatus[] = [];
   #taskToolCallCounts = new Map<string, number>();
+  #resultStores: ResultStore[] = [];
+  // Target types of all registered eval tests. Suites are registered while the test files
+  // are loaded, i.e. before `startEvalRun` is called from the global setup.
+  #evalTypes = new Set<string>();
 
   override registerSuiteSettings(suite: Mocha.Suite, suiteSettings: AiEvalSuiteSettings): void {
     super.registerSuiteSettings(suite, suiteSettings);
     if (suiteSettings.evalConfig) {
       this.#suiteToEvalConfig.set(suite, suiteSettings.evalConfig);
+      this.#evalTypes.add(suiteSettings.evalConfig.type ?? DEFAULT_EVAL_TYPE);
     }
   }
 
@@ -105,15 +132,20 @@ export class AiEvalStateProvider extends StateProvider {
     this.#logger = new EvalLogger();
     this.#taskStatuses = [];
     this.#taskToolCallCounts = new Map();
+    this.#resultStores = [];
+    const targets = [...this.#evalTypes];
+    const agent = targets.length === 1 ? `devtools-${targets[0]}` : MIXED_TARGETS_AGENT;
     this.#logger.append(`Evaluation run started for ${this.#runId} at ${this.#runStartTimestamp}`);
+    this.#logger.append(`Target: ${targets.join(', ')}, Agent: ${agent}`);
     uploadRunStarted({
       project: PROJECT_ID,
       runId: this.#runId,
-      agent: 'devtools-ai-evals',
+      agent,
       model: 'default',
       startTime: this.#runStartTimestamp,
       status: 'RUNNING',
     });
+    this.#logger.head('Running examples sequentially...');
   }
 
   finishEvalRun(): void {
@@ -144,12 +176,14 @@ export class AiEvalStateProvider extends StateProvider {
     if (this.#tempOutputDir && fs.existsSync(this.#tempOutputDir)) {
       fs.rmSync(this.#tempOutputDir, {recursive: true, force: true});
     }
+    this.#logger.info(`\nElapsed time: ${this.#logger.formatElapsedTime()}`);
   }
 
   override async launchBrowser(settings: BrowserSettings): Promise<BrowserWrapper> {
     return await Launcher.browserSetup({
       ...settings,
       chromeUsername: TestConfig.otaUsername ?? getDefaultOtaAccount(),
+      chromePassword: TestConfig.otaPassword,
     },
                                        StateProvider.serverPort);
   }
@@ -160,6 +194,7 @@ export class AiEvalStateProvider extends StateProvider {
 
   override async setupInspectedPage(context: puppeteer.BrowserContext, serverPort: number): Promise<InspectedPage> {
     const page = await context.newPage();
+    await page.bringToFront();
     return new InspectedPage(page, serverPort);
   }
 
@@ -180,7 +215,7 @@ export class AiEvalStateProvider extends StateProvider {
     handleTaskFailure({
       runId: this.#runId,
       taskId: evalConfig.taskId,
-      label: evalConfig.label,
+      target: evalConfig.type ?? DEFAULT_EVAL_TYPE,
       phase: 'Preparation',
       durationSeconds: Number(((performance.now() - startTime) / 1000).toFixed(2)),
       logger: this.#logger,
@@ -208,6 +243,7 @@ export class AiEvalStateProvider extends StateProvider {
     let baseState: E2EState;
     try {
       baseState = await super.createState(suite);
+      await baseState.inspectedPage.bringToFront();
     } catch (error) {
       if (evalConfig) {
         this.#recordPreparationFailure(evalConfig, startTime, error);
@@ -245,7 +281,7 @@ export class AiEvalStateProvider extends StateProvider {
           handleTaskFailure({
             runId: this.#runId,
             taskId: evalTask.taskId,
-            label: evalTask.label,
+            target: evalTask.type,
             phase: 'Execution',
             durationSeconds,
             logger: this.#logger,
@@ -254,11 +290,28 @@ export class AiEvalStateProvider extends StateProvider {
           });
         } else {
           try {
+            const trajectory = evalTask.trajectoryBuilder.build();
+            let customScore: number|null = null;
+            let gradingOutput: string|undefined;
+
+            if (!evalTask.hasFailed && evalTask.evals.length > 0) {
+              const store = new ResultStore(evalTask.type, evalTask.label);
+              const dateFolder = (this.#runStartTimestamp || new Date().toISOString()).slice(0, 10);
+              customScore = await evaluateTrajectory(trajectory, evalTask.evals, store, dateFolder);
+              if (store.results.size > 0) {
+                this.#resultStores.push(store);
+                printResults(store);
+                gradingOutput = formatStoreResults(store);
+                this.#logger.append(gradingOutput);
+              }
+            }
+
             finalizeEvalTask({
               runId: this.#runId,
               taskId: evalTask.taskId,
               label: evalTask.label,
-              trajectory: evalTask.trajectoryBuilder.build(),
+              target: evalTask.type,
+              trajectory,
               outputDir: this.#tempOutputDir,
               durationSeconds,
               logger: this.#logger,
@@ -266,6 +319,8 @@ export class AiEvalStateProvider extends StateProvider {
               taskToolCallCounts: this.#taskToolCallCounts,
               hasError: evalTask.hasFailed,
               errorMessage: evalTask.failureError,
+              customScore,
+              gradingOutput,
             });
           } catch (err) {
             const errorMessage = this.#logger.formatError(err as Error);
@@ -273,7 +328,7 @@ export class AiEvalStateProvider extends StateProvider {
             handleTaskFailure({
               runId: this.#runId,
               taskId: evalTask.taskId,
-              label: evalTask.label,
+              target: evalTask.type,
               phase: 'Finalization',
               durationSeconds,
               logger: this.#logger,
@@ -286,6 +341,9 @@ export class AiEvalStateProvider extends StateProvider {
       }
     } finally {
       try {
+        if (state.devToolsPage) {
+          await state.devToolsPage.page.close().catch(() => {});
+        }
         if (state.inspectedPage) {
           await state.inspectedPage.page.close().catch(() => {});
         }

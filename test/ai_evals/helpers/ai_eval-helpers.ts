@@ -125,9 +125,9 @@ export async function stopProcess(child?: childProcess.ChildProcess): Promise<vo
 
   const killPid = (signal: NodeJS.Signals) => {
     try {
-      // Negative PID sends the signal to the entire process group, ensuring
-      // child processes (shell, npm, node server) are terminated, not just
-      // the parent shell wrapper.
+      // Negative PID terminates the node server process group directly
+      // (without an intermediate shell wrapper), ensuring the server and any
+      // child processes it spawns are terminated.
       process.kill(-child.pid!, signal);
     } catch {
       // Process or process group already exited.
@@ -159,12 +159,13 @@ export async function stopEvalApp(app: RunningEvalApp): Promise<void> {
 /**
  * Locates the eval folder under `test/ai_evals/eval_data/evals/` (either directly at
  * `<evalId>` or nested under `<evalFolder>/<evalId>`), parses its `task.textproto`
- * for `base_app`, and starts the pre-built app with `node server.js`.
+ * for `base_app`, starts the pre-built app with `node server.js`, and waits until
+ * the server confirms it is listening on `localhost`.
  */
 export async function setupAndRunEvalApp(
     evalFolder: string,
     evalId: string,
-    flavor: AppFlavor = 'express',
+    flavor: AppFlavor = 'next',
     ): Promise<RunningEvalApp> {
   const nestedProtoPath = path.join(EVALS_DIR, evalFolder, evalId, TASK_TEXTPROTO);
   const flatProtoPath = path.join(EVALS_DIR, evalId, TASK_TEXTPROTO);
@@ -186,9 +187,8 @@ export async function setupAndRunEvalApp(
 
   const isVerbose = Boolean(process.env.DEBUG || process.env.VERBOSE);
 
-  const serverProcess = childProcess.spawn('node server.js', {
+  const serverProcess = childProcess.spawn('node', ['server.js'], {
     cwd: appDir,
-    shell: true,
     stdio: ['inherit', 'pipe', 'pipe'],
     detached: true,
     env: process.env,
@@ -209,6 +209,13 @@ export async function setupAndRunEvalApp(
   });
 
   const getOutput = (): string => output;
+
+  try {
+    await waitForProcessOutput(serverProcess, getOutput, /localhost:\d+/i);
+  } catch (error) {
+    await stopProcess(serverProcess);
+    throw error;
+  }
 
   return {
     process: serverProcess,

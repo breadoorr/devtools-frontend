@@ -340,6 +340,15 @@ describe('StringUtilities', () => {
       // NFD.
       assert.strictEqual(trimMiddle('caf\u0065\u0301', 4), 'café');
       assert.strictEqual(trimMiddle('caf\u0065\u0301', 3), 'c…é');
+
+      // Printable ASCII even and odd maxLengths.
+      assert.strictEqual(trimMiddle('abcdefghij', 5), 'ab…ij');
+      assert.strictEqual(trimMiddle('abcdefghij', 4), 'ab…j');
+      assert.strictEqual(trimMiddle('abcdefghij', 2), 'a…');
+
+      // ASCII control characters (\r\n is a single grapheme cluster).
+      assert.strictEqual(trimMiddle('a\r\nb\r\nc', 5), 'a\r\nb\r\nc');
+      assert.strictEqual(trimMiddle('a\r\nb\r\nc', 4), 'a\r\n…c');
     });
   });
 
@@ -397,6 +406,11 @@ describe('StringUtilities', () => {
     it('handles devanagari characters', () => {
       assert.strictEqual(trimEndWithMaxLength('देवनागरी', 5), 'देवनागरी');
       assert.strictEqual(trimEndWithMaxLength('देवनागरी', 4), 'देवना…');
+    });
+
+    it('preserves CRLF grapheme clusters in non-printable ASCII strings', () => {
+      assert.strictEqual(trimEndWithMaxLength('a\r\nb\r\nc', 5), 'a\r\nb\r\nc');
+      assert.strictEqual(trimEndWithMaxLength('a\r\nb\r\nc', 3), 'a\r\n…');
     });
   });
 
@@ -936,8 +950,17 @@ describe('StringUtilities', () => {
       assert.strictEqual(escapeCsvCell('+1+1'), '\'+1+1');
       assert.strictEqual(escapeCsvCell('@SUM(1)'), '\'@SUM(1)');
       assert.strictEqual(escapeCsvCell('-2+3+cmd|\' /C calc\'!A0'), '\'-2+3+cmd|\' /C calc\'!A0');
-      assert.strictEqual(escapeCsvCell('\tvalue'), '\'\tvalue');
+      assert.strictEqual(escapeCsvCell('\tvalue'), '"\'\tvalue"');
       assert.strictEqual(escapeCsvCell('\rvalue'), '"\'\rvalue"');
+    });
+
+    it('quotes cells containing alternate column separators', () => {
+      assert.strictEqual(escapeCsvCell('a;b'), '"a;b"');
+      assert.strictEqual(escapeCsvCell('a\tb'), '"a\tb"');
+      // Without quotes, a `;` or tab separator would start a new cell with `=`.
+      assert.strictEqual(escapeCsvCell('x;=1+1'), '"x;=1+1"');
+      assert.strictEqual(escapeCsvCell('x\t=1+1'), '"x\t=1+1"');
+      assert.strictEqual(escapeCsvCell('=1;2'), '"\'=1;2"');
     });
 
     it('neutralizes formulas hidden behind leading whitespace', () => {

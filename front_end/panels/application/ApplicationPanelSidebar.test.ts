@@ -11,7 +11,7 @@ import * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
 import * as AiAssistance from '../../models/ai_assistance/ai_assistance.js';
-import {getContextMenuForElement} from '../../testing/ContextMenuHelpers.js';
+import {findMenuItemWithLabel, getContextMenuForElement} from '../../testing/ContextMenuHelpers.js';
 import {
   createTarget,
   describeWithEnvironment,
@@ -64,6 +64,25 @@ describeWithEnvironment('ApplicationPanelSidebar', () => {
     Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
     sidebar = await Application.ResourcesPanel.ResourcesPanel.showAndGetSidebar();
     assert.isUndefined(sidebar.adsTreeElement);
+  });
+
+  it('shows Private Verification Tokens when the config is enabled', async () => {
+    updateHostConfig({devToolsPrivateVerificationTokens: {enabled: true}});
+    const panel = Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
+    const showViewSpy = sinon.spy(panel, 'showView');
+    const sidebar = await Application.ResourcesPanel.ResourcesPanel.showAndGetSidebar();
+    assert.exists(sidebar.privateVerificationTokensTreeElement);
+
+    sidebar.privateVerificationTokensTreeElement.onselect(false);
+    sinon.assert.calledOnceWithExactly(
+        showViewSpy, sinon.match.instanceOf(Application.PrivateVerificationTokensView.PrivateVerificationTokensView));
+  });
+
+  it('does not show Private Verification Tokens when the config is disabled', async () => {
+    updateHostConfig({devToolsPrivateVerificationTokens: {enabled: false}});
+    Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
+    const sidebar = await Application.ResourcesPanel.ResourcesPanel.showAndGetSidebar();
+    assert.isUndefined(sidebar.privateVerificationTokensTreeElement);
   });
 
   it('shows cookies for all frames', async () => {
@@ -561,6 +580,185 @@ describeWithEnvironment('IndexedDBTreeElement live update', () => {
 
     assert.isNull(os1View.element.querySelector('.stale-data-warning'));
     assert.isNull(index1View.element.querySelector('.stale-data-warning'));
+  });
+
+  it('refreshes object store and index data views when database is refreshed', async () => {
+    const MAIN_FRAME_ID = 'main' as Protocol.Page.FrameId;
+    const storageKey = `test-storage-key|${MAIN_FRAME_ID}|http://www.example.com`;
+
+    const loadObjectStoreDataStub = sinon.stub(model, 'loadObjectStoreData')
+                                        .callsFake((_dbId, _storeName, _keyRange, _skipCount, _pageSize, callback) => {
+                                          callback([], false);
+                                        });
+    const loadIndexDataStub =
+        sinon.stub(model, 'loadIndexData')
+            .callsFake((_dbId, _storeName, _indexName, _keyRange, _skipCount, _pageSize, callback) => {
+              callback([], false);
+            });
+    sinon.stub(model, 'getMetadata').resolves({entriesCount: 0, keyGeneratorValue: 0});
+    const refreshDatabaseStub = model.refreshDatabase as sinon.SinonStub;
+
+    const dbId = new Application.IndexedDBModel.DatabaseId({storageKey}, 'testDatabase');
+    model.dispatchEventToListeners(Application.IndexedDBModel.Events.DatabaseAdded, {databaseId: dbId, model});
+    const db = new Application.IndexedDBModel.Database(dbId, 1);
+    model.dispatchEventToListeners(Application.IndexedDBModel.Events.DatabaseLoaded,
+                                   {database: db, model, entriesUpdated: false});
+    await UI.Widget.Widget.allUpdatesComplete;
+
+    const dbTreeElement =
+        indexedDBTreeElement.children()[0] as Application.ApplicationPanelSidebar.IDBDatabaseTreeElement;
+
+    // Add two object stores with indexes and emit DatabaseLoaded with entriesUpdated: false.
+    const os1 = new Application.IndexedDBModel.ObjectStore('testObjectStore1', 'testKey', false);
+    os1.indexes.set('testIndex', new Application.IndexedDBModel.Index('testIndex', 'testKey', false, false));
+    const os2 = new Application.IndexedDBModel.ObjectStore('testObjectStore2', 'testKey', false);
+    os2.indexes.set('testIndex', new Application.IndexedDBModel.Index('testIndex', 'testKey', false, false));
+    db.objectStores.set('testObjectStore1', os1);
+    db.objectStores.set('testObjectStore2', os2);
+    model.dispatchEventToListeners(Application.IndexedDBModel.Events.DatabaseLoaded,
+                                   {database: db, model, entriesUpdated: false});
+    await UI.Widget.Widget.allUpdatesComplete;
+
+    assert.strictEqual(dbTreeElement.childCount(), 2);
+    const os1TreeElement = dbTreeElement.children()[0] as Application.ApplicationPanelSidebar.IDBObjectStoreTreeElement;
+    const os2TreeElement = dbTreeElement.children()[1] as Application.ApplicationPanelSidebar.IDBObjectStoreTreeElement;
+    const index1TreeElement = os1TreeElement.children()[0] as Application.ApplicationPanelSidebar.IDBIndexTreeElement;
+    const index2TreeElement = os2TreeElement.children()[0] as Application.ApplicationPanelSidebar.IDBIndexTreeElement;
+
+    os1TreeElement.onselect(false);
+    index1TreeElement.onselect(false);
+    os2TreeElement.onselect(false);
+    index2TreeElement.onselect(false);
+    await UI.Widget.Widget.allUpdatesComplete;
+
+    sinon.assert.calledTwice(loadObjectStoreDataStub);
+    sinon.assert.calledTwice(loadIndexDataStub);
+    loadObjectStoreDataStub.resetHistory();
+    loadIndexDataStub.resetHistory();
+
+    // Emitting DatabaseLoaded with entriesUpdated: false does not reload object store or index data.
+    model.dispatchEventToListeners(Application.IndexedDBModel.Events.DatabaseLoaded,
+                                   {database: db, model, entriesUpdated: false});
+    await UI.Widget.Widget.allUpdatesComplete;
+    sinon.assert.notCalled(loadObjectStoreDataStub);
+    sinon.assert.notCalled(loadIndexDataStub);
+
+    // Right-clicking the database tree element and selecting Refresh IndexedDB refreshes the database and data views.
+    refreshDatabaseStub.resetHistory();
+    const contextMenu = getContextMenuForElement(dbTreeElement.listItemElement);
+    const refreshItem = findMenuItemWithLabel(contextMenu.defaultSection(), 'Refresh IndexedDB');
+    assert.exists(refreshItem);
+    contextMenu.invokeHandler(refreshItem.id());
+
+    sinon.assert.calledOnceWithExactly(refreshDatabaseStub, dbId);
+
+    model.dispatchEventToListeners(Application.IndexedDBModel.Events.DatabaseLoaded,
+                                   {database: db, model, entriesUpdated: true});
+    await UI.Widget.Widget.allUpdatesComplete;
+
+    sinon.assert.calledTwice(loadObjectStoreDataStub);
+    sinon.assert.calledTwice(loadIndexDataStub);
+  });
+
+  it('shows Sub Apps or Sibling Sub Apps depending on the fetched data', async () => {
+    const resourceTreeModel = target.model(SDK.ResourceTreeModel.ResourceTreeModel);
+    assert.exists(resourceTreeModel);
+    const getSubApps = sinon.stub(resourceTreeModel, 'getSubApps').resolves([]);
+    const getSiblingSubApps = sinon.stub(resourceTreeModel, 'getSiblingSubApps').resolves([]);
+
+    Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
+    const sidebar = await Application.ResourcesPanel.ResourcesPanel.showAndGetSidebar();
+    assert.exists(sidebar.subAppsTreeElement);
+    assert.isTrue(sidebar.subAppsTreeElement.hidden);
+    assert.strictEqual(sidebar.subAppsTreeElement.title, 'Sub apps');
+
+    const sampleSubApps: Protocol.Page.SubApp[] = [
+      {
+        name: 'Child App',
+        scope: 'https://example.com/child/',
+        manifestId: 'https://example.com/child/',
+        startUrl: 'https://example.com/child/',
+      },
+    ];
+
+    // Inspecting a sub-app: its siblings are listed, so the node is titled
+    // "Sibling sub apps".
+    getSiblingSubApps.resolves(sampleSubApps);
+    await sidebar.subAppsTreeElement.update(resourceTreeModel);
+    assert.isFalse(sidebar.subAppsTreeElement.hidden);
+    assert.strictEqual(sidebar.subAppsTreeElement.title, 'Sibling sub apps');
+    assert.deepEqual(sidebar.subAppsTreeElement.getSubApps(), sampleSubApps);
+
+    getSiblingSubApps.resolves([]);
+    getSubApps.resolves(sampleSubApps);
+    await sidebar.subAppsTreeElement.update(resourceTreeModel);
+    assert.isFalse(sidebar.subAppsTreeElement.hidden);
+    assert.strictEqual(sidebar.subAppsTreeElement.title, 'Sub apps');
+    assert.deepEqual(sidebar.subAppsTreeElement.getSubApps(), sampleSubApps);
+
+    getSubApps.resolves([]);
+    await sidebar.subAppsTreeElement.update(resourceTreeModel);
+    assert.isTrue(sidebar.subAppsTreeElement.hidden);
+  });
+
+  it('ignores results of a superseded sub-apps update', async () => {
+    const resourceTreeModel = target.model(SDK.ResourceTreeModel.ResourceTreeModel);
+    assert.exists(resourceTreeModel);
+    const getSubApps = sinon.stub(resourceTreeModel, 'getSubApps').resolves([]);
+    sinon.stub(resourceTreeModel, 'getSiblingSubApps').resolves([]);
+
+    Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
+    const sidebar = await Application.ResourcesPanel.ResourcesPanel.showAndGetSidebar();
+
+    const staleSubApps: Protocol.Page.SubApp[] = [{
+      name: 'Stale App',
+      scope: 'https://example.com/stale/',
+      manifestId: 'https://example.com/stale/',
+      startUrl: 'https://example.com/stale/',
+    }];
+    const latestSubApps: Protocol.Page.SubApp[] = [{
+      name: 'Latest App',
+      scope: 'https://example.com/latest/',
+      manifestId: 'https://example.com/latest/',
+      startUrl: 'https://example.com/latest/',
+    }];
+
+    const {promise: staleResponse, resolve: resolveStale} = Promise.withResolvers<Protocol.Page.SubApp[]>();
+    getSubApps.returns(staleResponse);
+    const staleUpdate = sidebar.subAppsTreeElement.update(resourceTreeModel);
+
+    getSubApps.resolves(latestSubApps);
+    await sidebar.subAppsTreeElement.update(resourceTreeModel);
+    assert.deepEqual(sidebar.subAppsTreeElement.getSubApps(), latestSubApps);
+
+    resolveStale(staleSubApps);
+    await staleUpdate;
+    assert.deepEqual(sidebar.subAppsTreeElement.getSubApps(), latestSubApps);
+  });
+
+  it('fetches sub-apps from ResourceTreeModel on initialization', async () => {
+    const resourceTreeModel = target.model(SDK.ResourceTreeModel.ResourceTreeModel);
+    assert.exists(resourceTreeModel);
+
+    const sampleSubApps: Protocol.Page.SubApp[] = [
+      {
+        name: 'Child App',
+        scope: 'https://example.com/child/',
+        manifestId: 'https://example.com/child/',
+        startUrl: 'https://example.com/child/',
+      },
+    ];
+    sinon.stub(resourceTreeModel, 'getSubApps').resolves(sampleSubApps);
+    sinon.stub(resourceTreeModel, 'getSiblingSubApps').resolves([]);
+
+    Application.ResourcesPanel.ResourcesPanel.instance({forceNew: true});
+    const sidebar = await Application.ResourcesPanel.ResourcesPanel.showAndGetSidebar();
+    assert.exists(sidebar.subAppsTreeElement.latestUpdateForTest);
+    await sidebar.subAppsTreeElement.latestUpdateForTest;
+
+    assert.isFalse(sidebar.subAppsTreeElement.hidden);
+    assert.strictEqual(sidebar.subAppsTreeElement.title, 'Sub apps');
+    assert.deepEqual(sidebar.subAppsTreeElement.getSubApps(), sampleSubApps);
   });
 
   describe('ResourcesPanel toolbar', () => {

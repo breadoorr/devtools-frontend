@@ -3,10 +3,24 @@
 // found in the LICENSE file.
 
 import * as fs from 'node:fs';
+import {createRequire} from 'node:module';
 import * as path from 'node:path';
-import ts from 'typescript';
+import type ts from 'typescript';
 
 import {isNotFoundError} from '../utils/error.ts';
+
+let typescript: typeof ts|undefined;
+
+/**
+ * TODO(victorporof): Check if this can be removed once TS v7.1 is released.
+ * Loads TypeScript with `require` on first use. When an ES module imports this
+ * large CommonJS package, Node also detects its format and scans its exports.
+ * `require` skips both steps.
+ */
+function loadTypeScript(): typeof ts {
+  typescript ??= createRequire(import.meta.url)('typescript') as typeof ts;
+  return typescript;
+}
 
 export class TypeScriptImportExtractor {
   #tsImportsCache = new Map<string, Promise<string[]>>();
@@ -82,13 +96,21 @@ export class TypeScriptImportExtractor {
     if (importPath.endsWith('.js')) {
       const potentialTsName = baseName.replace(/\.js$/, '.ts');
       const potentialDtsName = baseName.replace(/\.js$/, '.d.ts');
-      return exists(potentialTsName, potentialDtsName, baseName);
+      const existing = exists(potentialTsName, potentialDtsName, baseName);
+      if (existing || dirListing.size === 0) {
+        return existing;
+      }
+      // A source that a generator writes to the gen dir (see
+      // scripts/build/ninja/generated_ts.gni) is missing from the source tree.
+      // The BUILD.gn of its directory still declares the target that owns it.
+      return path.join(targetDir, potentialTsName);
     }
 
     return exists(baseName);
   }
 
   #extractImports(absPath: string, fileContent: string): string[] {
+    const ts = loadTypeScript();
     const sourceFile = ts.createSourceFile(
         absPath,
         fileContent,

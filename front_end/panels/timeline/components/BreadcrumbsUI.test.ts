@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
-import {it} from 'mocha';
+import {describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Trace from '../../../models/trace/trace.js';
@@ -134,6 +134,31 @@ describeWithEnvironment('BreadcrumbsUI', () => {
         menu.invokeHandler(item.id());
 
         sinon.assert.calledOnceWithExactly(onBreadcrumbActivated, second, true);
+      });
+
+      it('schedules a re-render when removing child breadcrumbs from the already-active breadcrumb', async () => {
+        const {view, widget} = await createWidget();
+        const [first] = makeThreeBreadcrumbs();
+        widget.initialBreadcrumb = first;
+        widget.activeBreadcrumb = first;
+        const input = await view.nextInput;
+        widget.onBreadcrumbActivated = (breadcrumb, childBreadcrumbsRemoved) => {
+          if (childBreadcrumbsRemoved) {
+            breadcrumb.child = null;
+          }
+        };
+
+        const menu = getMenu(() => input.onBreadcrumbContextMenu(new MouseEvent('contextmenu'), first));
+        const item = findMenuItemWithLabel(menu.defaultSection(), 'Remove child breadcrumbs');
+        assert.exists(item);
+        const nextInputPromise = view.nextInput;
+        menu.invokeHandler(item.id());
+
+        const updatedInput = await nextInputPromise;
+        assert.strictEqual(updatedInput.initialBreadcrumb, first);
+        assert.strictEqual(updatedInput.activeBreadcrumb, first);
+        assert.isNull(updatedInput.initialBreadcrumb?.child);
+        assert.isTrue(updatedInput.showBreadcrumbs);
       });
     });
 

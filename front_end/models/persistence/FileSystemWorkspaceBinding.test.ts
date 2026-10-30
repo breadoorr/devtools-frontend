@@ -33,7 +33,7 @@ describe('FileSystemWorkspaceBinding', () => {
   });
 
   afterEach(() => {
-    sinon.restore();
+    universe.dispose();
   });
 
   it('does not conflict when file system paths share a prefix', async () => {
@@ -315,6 +315,7 @@ describe('FileSystemWorkspaceBinding', () => {
       } finally {
         removeFileSystem();
         binding.dispose();
+        manager.dispose();
       }
     });
 
@@ -343,6 +344,7 @@ describe('FileSystemWorkspaceBinding', () => {
       } finally {
         removeFileSystem();
         binding.dispose();
+        manager.dispose();
       }
     });
 
@@ -362,6 +364,7 @@ describe('FileSystemWorkspaceBinding', () => {
         assert.isNull(workspace.uiSourceCodeForURL(fileURL));
       } finally {
         binding.dispose();
+        manager.dispose();
       }
     });
   });

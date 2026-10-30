@@ -123,9 +123,13 @@ describeWithEnvironment('CommentsPane', () => {
     const [t1] = seedThreads(commentManager);
     const {view} = await createWidget(commentManager);
 
-    view.input.onThreadClick(t1);
+    view.input.onThreadClick(t1, {left: 16, top: 450});
 
-    sinon.assert.calledOnceWithExactly(revealStub, t1, false);
+    sinon.assert.calledOnceWithExactly(
+        revealStub,
+        new CommentManager.CommentThread.RevealableThread(t1, {left: 16, top: 450}),
+        false,
+    );
   });
 
   it('sends all active threads to agent when send to agent button is clicked', async () => {
@@ -167,13 +171,26 @@ describeWithEnvironment('CommentsPane', () => {
     assert.strictEqual(queuedInput.activeTab, 'queued');
     assert.deepEqual(queuedInput.threads.map(item => item.thread.id), [t1.id]);
   });
+
+  it('updates the sent tab when the agent takes the sent threads', async () => {
+    const commentManager = new CommentManager.CommentManager.CommentManager();
+    const [t1] = seedThreads(commentManager);
+    t1.sendToAgent();
+
+    const {view} = await createWidget(commentManager);
+    view.input.onTabSelect('sent');
+    const sentInput = await view.nextInput;
+    assert.deepEqual(sentInput.threads.map(item => item.thread.id), [t1.id]);
+    assert.isFalse(sentInput.threads[0].thread.transmitted);
+
+    commentManager.takeComments();
+    const takenInput = await view.nextInput;
+    assert.deepEqual(takenInput.threads.map(item => item.thread.id), [t1.id]);
+    assert.isTrue(takenInput.threads[0].thread.transmitted);
+  });
 });
 
 describeWithEnvironment('CommentsPane DEFAULT_VIEW', () => {
-  beforeEach(() => {
-    CommentManager.CommentThread.CommentThread.resetIndex();
-  });
-
   function renderView(inputOverrides: Partial<Parameters<typeof DEFAULT_VIEW>[0]> = {}): HTMLElement {
     const target = document.createElement('div');
     target.style.width = '360px';
@@ -198,7 +215,6 @@ describeWithEnvironment('CommentsPane DEFAULT_VIEW', () => {
   }
 
   function createMockThread(
-      index: number,
       selectorText: string,
       commentText: string,
       options: Partial<Comments.CommentsPane.ThreadViewData> = {},
@@ -228,17 +244,14 @@ describeWithEnvironment('CommentsPane DEFAULT_VIEW', () => {
   it('renders comments list with various thread states', async () => {
     const threads: Comments.CommentsPane.ThreadViewData[] = [
       createMockThread(
-          1,
           'a.o-text-cta--small',
           'Left align this button with H2 and use the primary pink colour for the button.',
           ),
       createMockThread(
-          2,
           'div.c-scrolling-list',
           'Remove the animation from H1.',
           ),
       createMockThread(
-          3,
           'span.sub-header',
           'Updated font weight.',
           ),
@@ -250,14 +263,18 @@ describeWithEnvironment('CommentsPane DEFAULT_VIEW', () => {
   });
 
   it('renders comments list in the sent tab', async () => {
-    const pendingThread = createMockThread(
-        1,
+    const sentThread = createMockThread(
         'a.cta',
         'Left align this button with H2 and use the primary pink colour for the button.',
     );
-    pendingThread.thread.sendToAgent();
+    sentThread.thread.sendToAgent();
+    const workingThread = createMockThread(
+        'img.hero',
+        'Add an animation to the hero image.',
+    );
+    workingThread.thread.sendToAgent();
+    workingThread.thread.markTransmitted();
     const resolvedThread = createMockThread(
-        2,
         'div.list',
         'Remove the animation from H1.',
     );
@@ -265,7 +282,7 @@ describeWithEnvironment('CommentsPane DEFAULT_VIEW', () => {
 
     const target = renderView({
       activeTab: 'sent',
-      threads: [pendingThread, resolvedThread],
+      threads: [sentThread, workingThread, resolvedThread],
     });
     renderElementIntoDOM(target, {includeCommonStyles: true});
     const spinner = target.querySelector('devtools-spinner');
@@ -274,10 +291,29 @@ describeWithEnvironment('CommentsPane DEFAULT_VIEW', () => {
     await assertScreenshot('comments/comments_pane_sent.png');
   });
 
+  it('shows "Sent" for a sent thread until the agent takes it, then "Working"', () => {
+    const threadData = createMockThread('a.cta', 'Test comment');
+    threadData.thread.sendToAgent();
+
+    let target = renderView({activeTab: 'sent', threads: [threadData]});
+    let item = target.querySelector('.comment-thread-item');
+    assert.isNotNull(item);
+    assert.isNotNull(item.querySelector('.thread-status-sent'));
+    assert.isNull(item.querySelector('.thread-status-working'));
+    assert.isNull(item.querySelector('devtools-spinner'));
+
+    threadData.thread.markTransmitted();
+    target = renderView({activeTab: 'sent', threads: [threadData]});
+    item = target.querySelector('.comment-thread-item');
+    assert.isNotNull(item);
+    assert.isNull(item.querySelector('.thread-status-sent'));
+    assert.isNotNull(item.querySelector('.thread-status-working devtools-spinner'));
+  });
+
   it('does not trigger thread selection when pressing Enter or Space on the delete button', () => {
     const onThreadClick = sinon.spy();
 
-    const mockThreadData = createMockThread(1, 'a.button', 'Test comment');
+    const mockThreadData = createMockThread('a.button', 'Test comment');
     const target = renderView({
       threads: [mockThreadData],
       onThreadClick,
@@ -297,6 +333,9 @@ describeWithEnvironment('CommentsPane DEFAULT_VIEW', () => {
 
     const threadItem = target.querySelector('.comment-thread-item') as HTMLElement;
     threadItem.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
-    sinon.assert.calledOnceWithExactly(onThreadClick, mockThreadData.thread);
+    sinon.assert.calledOnceWithMatch(onThreadClick, mockThreadData.thread, sinon.match({
+      left: sinon.match.number,
+      top: sinon.match.number,
+    }));
   });
 });

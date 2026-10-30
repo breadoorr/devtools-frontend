@@ -43,7 +43,7 @@ import * as Root from '../../core/root/root.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as TextUtils from '../../core/text_utils/text_utils.js';
 import * as Protocol from '../../generated/protocol.js';
-import * as AIAssistance from '../../models/ai_assistance/ai_assistance.js';
+import * as AIAssistance from '../../models/ai-utils/ai-utils.js';
 import * as Badges from '../../models/badges/badges.js';
 import * as Bindings from '../../models/bindings/bindings.js';
 import * as ChangeTracker from '../../models/change_tracker/change_tracker.js';
@@ -101,6 +101,7 @@ export function buildChangeSelector(tracker: ChangeTracker.ChangeTracker.ChangeT
 
 const {html, nothing, render, Directives: {classMap, ifDefined, ref, repeat, styleMap, until}} = Lit;
 const {animateOn} = UI.UIUtils;
+const {widget} = UI.Widget;
 const {RegisteredAdorners} = ElementsComponents.AdornerManager;
 
 const UIStrings = {
@@ -519,11 +520,11 @@ function renderTitle(node: SDK.DOMModel.DOMNode, input: ViewInput): Lit.LitTempl
 
       if (isExpandable) {
         if (!expanded) {
-          return html`${openingTag}<devtools-elements-tree-expand-button .data=${
-              {clickHandler: onExpand} as
-              ElementsComponents.ElementsTreeExpandButton
-                  .ElementsTreeExpandButtonData}></devtools-elements-tree-expand-button><span style="font-size: 0;"
-                  >…</span>\u200B${renderClosingTag()}`;
+          return html`${openingTag}<devtools-widget ${
+              widget(ElementsComponents.ElementsTreeExpandButton.ElementsTreeExpandButton, {
+                clickHandler: onExpand,
+              })}></devtools-widget><span style="font-size: 0;"
+                  >\u2026</span>\u200B${renderClosingTag()}`;
         }
         return openingTag;
       }
@@ -701,7 +702,9 @@ function renderLinkifiedValue(value: string, node: SDK.DOMModel.DOMNode): Lit.Te
   if (value.startsWith('data:')) {
     value = Platform.StringUtilities.trimMiddle(value, 60);
   }
-  const isAnchor = node && node.nodeName().toLowerCase() === 'a';
+  // Page-authored hrefs must not open privileged URLs (e.g. `devtools://` or `chrome://`) on click. Anchors with
+  // other schemes fall through to the Linkifier, which renders privileged URLs as inert text.
+  const isAnchor = node && node.nodeName().toLowerCase() === 'a' && Common.ParsedURL.hasWebSafeScheme(rewrittenHref);
   if (isAnchor) {
     return html`<devtools-link class="devtools-link image-url" href=${rewrittenHref} ${ref(el => {
       if (el) {

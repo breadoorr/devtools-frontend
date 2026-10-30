@@ -259,8 +259,6 @@ describeWithEnvironment('ElementsPanel', () => {
     hideStub.resetHistory();
     panel.onSearchCanceled();
     sinon.assert.calledWith(hideStub, SDK.TargetManager.TargetManager.instance());
-
-    hideStub.restore();
   });
 
   // Causes unit test execution to abort
@@ -923,6 +921,33 @@ describeWithEnvironment('ElementsPanel', () => {
     await panel.revealAndSelectNode(uaInnerDiv, {showPanel: false, highlightInOverlay: false});
     assert.strictEqual((selectStub.lastCall.args[0] as SDK.DOMModel.DOMNode).id, uaInnerDiv.id);
 
+    panel.detach();
+  });
+
+  it('does not accumulate STYLES_UPDATE_COMPLETED listeners when switching sidebar tabs', () => {
+    const panel =
+        new Elements.ElementsPanel.ElementsPanel(SDK.TargetManager.TargetManager.instance(), universe.settings);
+    panel.markAsRoot();
+    renderElementIntoDOM(panel);
+
+    assert.exists(panel.sidebarPaneView);
+    panel.sidebarPaneView.appendView(
+        new UI.View.SimpleView({title: 'Extra' as Common.UIString.LocalizedString, viewId: 'extra'}));
+    const tabbedPane = panel.sidebarPaneView.tabbedPane();
+
+    tabbedPane.selectTab(Elements.ElementsPanel.SidebarPaneTabId.STYLES);
+    const addSpy = sinon.spy(panel.stylesWidget, 'addEventListener');
+    const removeSpy = sinon.spy(panel.stylesWidget, 'removeEventListener');
+    const eventName = Elements.StylesSidebarPane.Events.STYLES_UPDATE_COMPLETED;
+    const isStylesUpdateCompleted = (call: sinon.SinonSpyCall): boolean => call.args[0] === eventName;
+
+    for (let i = 0; i < 3; i++) {
+      tabbedPane.selectTab('extra');
+      tabbedPane.selectTab(Elements.ElementsPanel.SidebarPaneTabId.STYLES);
+    }
+
+    assert.strictEqual(addSpy.getCalls().filter(isStylesUpdateCompleted).length,
+                       removeSpy.getCalls().filter(isStylesUpdateCompleted).length);
     panel.detach();
   });
 });

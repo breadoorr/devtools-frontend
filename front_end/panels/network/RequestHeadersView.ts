@@ -120,7 +120,7 @@ interface ViewInput {
   toReveal?: {section: NetworkForward.UIRequestLocation.UIHeaderSection, header?: string};
   backendLink: {label: string, url: URL}|null;
 }
-type View = (input: ViewInput, output: object, target: HTMLElement) => void;
+type View = (input: ViewInput, output: undefined, target: HTMLElement) => void;
 
 export function renderGeneralRows(input: ViewInput): Lit.LitTemplate {
   const statusClasses = ['status'];
@@ -284,11 +284,15 @@ export class RequestHeadersView extends UI.Widget.Widget {
   set request(val) {
     this.#removeEventListeners();
     this.#request = val;
-    this.#addEventListeners();
+    // When hidden, `wasShown()` adds the listeners and refreshes the view.
+    if (this.isShowing()) {
+      this.#addEventListeners();
+      this.requestUpdate();
+    }
   }
 
   constructor(target?: HTMLElement, view: View = DEFAULT_VIEW) {
-    super();
+    super(target);
     this.#view = view;
   }
 
@@ -395,7 +399,7 @@ export class RequestHeadersView extends UI.Widget.Widget {
           null,
     };
 
-    this.#view(input, {}, this.contentElement);
+    this.#view(input, undefined, this.contentElement);
   }
 
   #getHeaderOverridesFileUrl(): Platform.DevToolsPath.UrlString {

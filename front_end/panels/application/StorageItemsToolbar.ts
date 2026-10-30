@@ -51,7 +51,7 @@ interface ViewInput {
   mainToolbarItems: UI.Toolbar.ToolbarItem[];
 }
 
-export const DEFAULT_VIEW = (input: ViewInput, _output: object, target: HTMLElement): void => {
+export const DEFAULT_VIEW = (input: ViewInput, _output: undefined, target: HTMLElement): void => {
   render(
       // clang-format off
       html`
@@ -88,12 +88,12 @@ export const DEFAULT_VIEW = (input: ViewInput, _output: object, target: HTMLElem
                          .variant=${Buttons.Button.Variant.TOOLBAR}></devtools-button>
         ${input.mainToolbarItems.map(item => item.element)}
       </devtools-toolbar>
-      ${input.metadataView}`,
+      ${UI.Widget.widget(UI.Widget.WrapperWidget, {widget: input.metadataView})}`,
       // clang-format on
       target);
 };
 
-export type View = (input: ViewInput, output: object, target: HTMLElement) => void;
+export type View = (input: ViewInput, output: undefined, target: HTMLElement) => void;
 
 const StorageItemsToolbarBase: Common.ObjectWrapper.EventMixin<StorageItemsToolbar.EventTypes, typeof UI.Widget.VBox> =
     Common.ObjectWrapper.eventMixin(
@@ -149,7 +149,7 @@ export class StorageItemsToolbar extends StorageItemsToolbarBase {
         this.dispatchEventToListeners(StorageItemsToolbar.Events.DELETE_SELECTED);
       },
     };
-    this.#view(viewInput, {}, this.contentElement);
+    this.#view(viewInput, undefined, this.contentElement);
   }
 
   setDeleteAllTitle(title: string): void {
@@ -168,7 +168,7 @@ export class StorageItemsToolbar extends StorageItemsToolbarBase {
   }
 
   setStorageKey(storageKey: string): void {
-    this.metadataView.setStorageKey(storageKey);
+    this.metadataView.storageKey = storageKey;
   }
 
   filterChanged({detail: text}: CustomEvent<string|null>): void {

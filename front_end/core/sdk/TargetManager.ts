@@ -236,7 +236,7 @@ export class TargetManager extends Common.ObjectWrapper.ObjectWrapper<EventTypes
     }
   }
 
-  private modelRemoved(modelClass: SDKModelConstructor, model: SDKModel, inScope: boolean): void {
+  #modelRemoved(modelClass: SDKModelConstructor, model: SDKModel, inScope: boolean): void {
     for (const observer of this.#modelObservers.get(modelClass).values()) {
       if (!this.#scopedObservers.has(observer) || inScope) {
         observer.modelRemoved(model);
@@ -264,15 +264,18 @@ export class TargetManager extends Common.ObjectWrapper.ObjectWrapper<EventTypes
     if (!this.#modelListeners.has(eventType)) {
       return;
     }
-    let wrappedListener = null;
+    const wrappedListeners: Array<Common.EventTarget.EventListener<Events, T>> = [];
     for (const info of this.#modelListeners.get(eventType)) {
       if (info.modelClass === modelClass && info.listener === listener && info.thisObject === thisObject) {
-        wrappedListener = info.wrappedListener;
+        wrappedListeners.push(info.wrappedListener);
         this.#modelListeners.delete(eventType, info);
       }
     }
-    if (wrappedListener) {
-      for (const model of this.models(modelClass)) {
+    if (wrappedListeners.length === 0) {
+      return;
+    }
+    for (const model of this.models(modelClass)) {
+      for (const wrappedListener of wrappedListeners) {
         model.removeEventListener(eventType, wrappedListener);
       }
     }
@@ -367,7 +370,7 @@ export class TargetManager extends Common.ObjectWrapper.ObjectWrapper<EventTypes
     for (const modelClass of target.models().keys()) {
       const model = target.models().get(modelClass);
       assertNotNullOrUndefined(model);
-      this.modelRemoved(modelClass, model, inScope);
+      this.#modelRemoved(modelClass, model, inScope);
     }
 
     // Iterate over a copy. #observers might be modified during iteration.

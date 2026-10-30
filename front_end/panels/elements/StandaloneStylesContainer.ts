@@ -13,7 +13,7 @@ import {html, render} from '../../ui/lit/lit.js';
 import * as SettingsUI from '../../ui/settings/settings.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
-import * as ElementsComponents from './components/components.js';
+import type * as ElementsComponents from './components/components.js';
 import {StylePropertiesSection} from './StylePropertiesSection.js';
 import type {StylePropertyTreeElement} from './StylePropertyTreeElement.js';
 import type {StylesContainer} from './StylesContainer.js';
@@ -57,9 +57,8 @@ export class StandaloneStylesContainer extends StandaloneStylesContainerBase imp
   activeCSSAngle: InlineEditor.CSSAngle.CSSAngle|null = null;
   isEditingStyle = false;
   readonly sectionByElement: WeakMap<Node, StylePropertiesSection> = new WeakMap<Node, StylePropertiesSection>();
-  // TODO: Reference the MAX_LINK_LENGTH from StylesSidebarPane at a later stage, when we have a reference to it.
-  readonly linkifier: Components.Linkifier.Linkifier =
-      new Components.Linkifier.Linkifier(23, /* useLinkDecorator */ true);
+  #linkifier: Components.Linkifier.Linkifier|null = null;
+  #domNode: SDK.DOMModel.DOMNode|null = null;
 
   #webCustomData: WebCustomData|undefined;
   userOperation = false;
@@ -73,8 +72,32 @@ export class StandaloneStylesContainer extends StandaloneStylesContainerBase imp
   constructor(element?: HTMLElement, view: View = DEFAULT_VIEW) {
     super(element, {useShadowDom: true});
     this.#view = view;
+  }
+
+  get linkifier(): Components.Linkifier.Linkifier {
+    if (!this.#linkifier) {
+      // TODO: Reference the MAX_LINK_LENGTH from StylesSidebarPane at a later stage, when we have a reference to it.
+      this.#linkifier = new Components.Linkifier.Linkifier(23, /* useLinkDecorator */ true);
+    }
+    return this.#linkifier;
+  }
+
+  override wasShown(): void {
+    super.wasShown();
     this.#computedStyleModelInternal.addEventListener(ComputedStyle.ComputedStyleModel.Events.CSS_MODEL_CHANGED,
                                                       this.#onCSSModelChanged, this);
+    if (this.#computedStyleModelInternal.node !== this.#domNode) {
+      this.#computedStyleModelInternal.node = this.#domNode;
+    }
+  }
+
+  override willHide(): void {
+    super.willHide();
+    this.#computedStyleModelInternal.removeEventListener(ComputedStyle.ComputedStyleModel.Events.CSS_MODEL_CHANGED,
+                                                         this.#onCSSModelChanged, this);
+    this.#computedStyleModelInternal.dispose();
+    this.#linkifier?.dispose();
+    this.#linkifier = null;
   }
 
   #rebuildAndUpdate(): void {
@@ -140,6 +163,7 @@ export class StandaloneStylesContainer extends StandaloneStylesContainerBase imp
       return;
     }
 
+    this.linkifier.reset();
     const newSections: StylePropertiesSection[] = [];
     let sectionIdx = 0;
     for (const style of matchedStyles.nodeStyles()) {
@@ -181,11 +205,14 @@ export class StandaloneStylesContainer extends StandaloneStylesContainerBase imp
 
   // TODO: Refactor StylesContainer to use getter for node(), so that we can have a `node` setter here: set node().
   set domNode(node: SDK.DOMModel.DOMNode|null) {
-    if (this.#computedStyleModelInternal.node === node) {
+    if (this.#domNode === node) {
       return;
     }
-    this.#computedStyleModelInternal.node = node;
-    this.forceUpdate();
+    this.#domNode = node;
+    if (this.isShowing()) {
+      this.#computedStyleModelInternal.node = node;
+      this.forceUpdate();
+    }
   }
 
   set filter(regex: RegExp|null) {
@@ -261,16 +288,11 @@ export class StandaloneStylesContainer extends StandaloneStylesContainerBase imp
     return this.#sections;
   }
 
-  getVariablePopoverContents(
-      matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles, variableName: string,
-      computedValue: string|null): ElementsComponents.CSSVariableValueView.CSSVariableValueView {
+  getRegisteredPropertyDetails(matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles, variableName: string):
+      ElementsComponents.CSSVariableValueView.RegisteredPropertyDetails|undefined {
     const registration = matchedStyles.getRegisteredProperty(variableName);
-    return new ElementsComponents.CSSVariableValueView.CSSVariableValueView({
-      variableName,
-      value: computedValue ?? undefined,
-      // TODO: provide a goToDefinition to jump to the StylesSidebarPane
-      details: registration ? {registration, goToDefinition: () => {}} : undefined,
-    });
+    // TODO: provide a goToDefinition to jump to the StylesSidebarPane
+    return registration ? {registration, goToDefinition: () => {}} : undefined;
   }
 
   getVariableParserError(_matchedStyles: SDK.CSSMatchedStyles.CSSMatchedStyles, _variableName: string):

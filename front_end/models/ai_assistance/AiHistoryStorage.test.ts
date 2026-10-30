@@ -666,7 +666,7 @@ describe('AiHistoryStorage', () => {
 
     it('should generate markdown from a conversation', function() {
       const fakeTime = new Date('2024-01-01T00:00:00.000Z');
-      const clock = sinon.useFakeTimers(fakeTime);
+      sinon.useFakeTimers(fakeTime);
 
       const history: AiAssistance.AiAgent.ResponseData[] = [
         {
@@ -690,19 +690,19 @@ describe('AiHistoryStorage', () => {
         },
         {
           type: AiAssistance.AiAgent.ResponseType.ACTION,
-          code: 'console.log("blue")',
+          action: 'console.log("blue")',
           output: 'blue',
           canceled: false,
         },
         {
           type: AiAssistance.AiAgent.ResponseType.ACTION,
-          code: 'console.log("red")',
+          action: 'console.log("red")',
           output: 'Error: User denied code execution with side effects',
           canceled: true,
         },
         {
           type: AiAssistance.AiAgent.ResponseType.ACTION,
-          code: 'console.log("no output")',
+          action: 'console.log("no output")',
           canceled: false,
         },
         {
@@ -728,7 +728,6 @@ describe('AiHistoryStorage', () => {
       const markdown = conversation.getConversationMarkdown();
 
       snapshotTester.assert(this, markdown);
-      clock.restore();
     });
   });
 });

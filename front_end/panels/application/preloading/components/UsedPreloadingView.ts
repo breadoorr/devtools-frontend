@@ -342,7 +342,7 @@ function renderSpeculationsInitiatedByThisPageSummarySections(
               jslog=${VisualLogging.action('view-all-rules').track({click: true})}>
             ${i18nString(UIStrings.viewAllRules)}
           </button>
-         ・
+         \u30fb
           <button class="link devtools-link" @click=${revealAttemptViewWithFilter}
               jslog=${VisualLogging.action('view-all-speculations').track({click: true})}>
            ${i18nString(UIStrings.viewAllSpeculations)}
@@ -425,8 +425,8 @@ const DEFAULT_VIEW: View = (input, _output, target) => {
 export class UsedPreloadingView extends UI.Widget.VBox {
   readonly #view: View;
 
-  constructor(view: View = DEFAULT_VIEW) {
-    super({useShadowDom: true});
+  constructor(element?: HTMLElement, view: View = DEFAULT_VIEW) {
+    super(element, {useShadowDom: true});
     this.#view = view;
   }
 

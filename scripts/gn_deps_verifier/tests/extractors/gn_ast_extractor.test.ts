@@ -8,14 +8,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import sinon from 'sinon';
 
-import {GnAstExtractor, isInsideRoot} from '../../extractors/gn_ast_extractor.ts';
+import {GnAstExtractor, isGeneratedSource, isInsideRoot, resolveSourcePath} from '../../extractors/gn_ast_extractor.ts';
 
 const FIXTURES_DIR = path.join(import.meta.dirname, '../fixtures');
 const ROOT_DIR = path.resolve(import.meta.dirname, '../../../../');
 
 describe('GnAstExtractor', () => {
   afterEach(() => {
-    sinon.restore();
     GnAstExtractor.clearCacheForTesting();
   });
 
@@ -126,6 +125,83 @@ describe('GnAstExtractor', () => {
       const subPath = path.join(FIXTURES_DIR, 'sub.ts');
       const subTarget = await extractor.getTargetsForFile(subPath);
       assert.deepEqual(subTarget, ['//scripts/gn_deps_verifier/tests/fixtures:subtraction_target']);
+    });
+
+    it('maps a generated source in $target_gen_dir to its path in the source tree', async () => {
+      // The file only exists in the gen dir after a build, but imports of it
+      // point here.
+      const generatedPath = path.join(FIXTURES_DIR, 'typescript_analyzer/generated/Properties.ts');
+      const target = await extractor.getTargetsForFile(generatedPath);
+      assert.deepEqual(target, ['//scripts/gn_deps_verifier/tests/fixtures/typescript_analyzer/generated:properties']);
+    });
+
+    it('finds target declared in an ancestor BUILD.gn when nearer BUILD.gn exists without the source', async () => {
+      const tempDir = await fs.promises.mkdtemp(path.join(import.meta.dirname, 'gn-test-'));
+      try {
+        const parentDir = path.join(tempDir, 'parent');
+        const childDir = path.join(parentDir, 'child');
+        await fs.promises.mkdir(childDir, {recursive: true});
+
+        await fs.promises.writeFile(
+            path.join(parentDir, 'BUILD.gn'),
+            'group("ancestor_target") {\n  sources = [ "child/Source.ts" ]\n}\n',
+        );
+        await fs.promises.writeFile(
+            path.join(childDir, 'BUILD.gn'),
+            'group("child_target") {\n  sources = [ "Other.ts" ]\n}\n',
+        );
+
+        GnAstExtractor.clearCacheForTesting();
+        const customExtractor = GnAstExtractor.create(tempDir);
+
+        const target = await customExtractor.getTargetsForFile(path.join(childDir, 'Source.ts'));
+        assert.deepEqual(target, ['//parent:ancestor_target']);
+
+        const childTarget = await customExtractor.getTargetsForFile(path.join(childDir, 'Other.ts'));
+        assert.deepEqual(childTarget, ['//parent/child:child_target']);
+
+        const unlistedTarget = await customExtractor.getTargetsForFile(path.join(childDir, 'Unlisted.ts'));
+        assert.deepEqual(unlistedTarget, []);
+      } finally {
+        await fs.promises.rm(tempDir, {recursive: true, force: true});
+      }
+    });
+
+    it('handles parallel concurrent requests for files requiring ancestor traversal', async () => {
+      const tempDir = await fs.promises.mkdtemp(path.join(import.meta.dirname, 'gn-test-'));
+      try {
+        const childDir = path.join(tempDir, 'child');
+        await fs.promises.mkdir(childDir, {recursive: true});
+
+        await fs.promises.writeFile(
+            path.join(tempDir, 'BUILD.gn'),
+            'group("ancestor_target") {\n  sources = [ "child/AncestorSource.ts" ]\n}\n',
+        );
+        await fs.promises.writeFile(
+            path.join(childDir, 'BUILD.gn'),
+            'group("child_target") {\n  sources = [ "ChildSource.ts" ]\n}\n',
+        );
+
+        GnAstExtractor.clearCacheForTesting();
+        const customExtractor = GnAstExtractor.create(tempDir);
+
+        // Fire parallel requests for the same file, sibling files, and unlisted files
+        const [ancestor1, ancestor2, child, unlisted1, unlisted2] = await Promise.all([
+          customExtractor.getTargetsForFile(path.join(childDir, 'AncestorSource.ts')),
+          customExtractor.getTargetsForFile(path.join(childDir, 'AncestorSource.ts')),
+          customExtractor.getTargetsForFile(path.join(childDir, 'ChildSource.ts')),
+          customExtractor.getTargetsForFile(path.join(childDir, 'Unlisted.ts')),
+          customExtractor.getTargetsForFile(path.join(childDir, 'Unlisted.ts')),
+        ]);
+
+        assert.deepEqual(ancestor1, ['//:ancestor_target']);
+        assert.deepEqual(ancestor2, ['//:ancestor_target']);
+        assert.deepEqual(child, ['//child:child_target']);
+        assert.deepEqual(unlisted1, []);
+        assert.deepEqual(unlisted2, []);
+      } finally {
+        await fs.promises.rm(tempDir, {recursive: true, force: true});
+      }
     });
   });
 
@@ -266,6 +342,36 @@ describe('GnAstExtractor', () => {
 
     it('returns false for sibling directories outside root', () => {
       assert.isFalse(isInsideRoot(ROOT_DIR, path.resolve(ROOT_DIR, '../sibling')));
+    });
+  });
+
+  describe('isGeneratedSource', () => {
+    it('recognizes sources in $target_gen_dir', () => {
+      assert.isTrue(isGeneratedSource('$target_gen_dir/Properties.ts'));
+    });
+
+    it('returns false for source tree paths', () => {
+      assert.isFalse(isGeneratedSource('Properties.ts'));
+      assert.isFalse(isGeneratedSource('//front_end/generated/Properties.ts'));
+    });
+  });
+
+  describe('resolveSourcePath', () => {
+    const buildDir = path.join(ROOT_DIR, 'front_end/generated');
+
+    it('resolves relative sources against the BUILD.gn directory', () => {
+      assert.strictEqual(resolveSourcePath('Properties.ts', buildDir, ROOT_DIR),
+                         path.join(ROOT_DIR, 'front_end/generated/Properties.ts'));
+    });
+
+    it('resolves GN root-relative // sources against rootDir', () => {
+      assert.strictEqual(resolveSourcePath('//front_end/core/Foo.ts', buildDir, ROOT_DIR),
+                         path.join(ROOT_DIR, 'front_end/core/Foo.ts'));
+    });
+
+    it('resolves generated sources to the matching path in the source tree', () => {
+      assert.strictEqual(resolveSourcePath('$target_gen_dir/Properties.ts', buildDir, ROOT_DIR),
+                         path.join(ROOT_DIR, 'front_end/generated/Properties.ts'));
     });
   });
 });

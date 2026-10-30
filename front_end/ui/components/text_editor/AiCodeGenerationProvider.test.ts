@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
-import {afterEach, beforeEach, describe, it} from 'mocha';
+import {beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Common from '../../../core/common/common.js';
@@ -86,10 +86,6 @@ describeWithEnvironment('AiCodeGenerationProvider', () => {
     sinon.stub(UI.UIUtils.PromotionManager.instance(), 'maybeShowPromotion').returns(true);
     generateCodeStub = sinon.stub(AiCodeGeneration.AiCodeGeneration.AiCodeGeneration.prototype, 'generateCode');
     sinon.stub(AiCodeGenerationTeaser.AiCodeGenerationTeaser.prototype, 'displayState').set(_ => {});
-  });
-
-  afterEach(() => {
-    clock.restore();
   });
 
   it('does not create a provider when the feature is disabled', () => {
@@ -218,6 +214,33 @@ describeWithEnvironment('AiCodeGenerationProvider', () => {
       assert.strictEqual(editor.state.doc.toString(), 'code suggestion');
       provider.dispose();
     });
+
+    for (const key of ['Tab', 'Enter']) {
+      it(`ignores ${key} for completion suggestions`, async () => {
+        const registerUserAcceptanceSpy =
+            sinon.spy(AiCodeGeneration.AiCodeGeneration.AiCodeGeneration.prototype, 'registerUserAcceptance');
+        const {editor, provider} = createEditorWithProvider('');
+        await clock.tickAsync(0);
+
+        editor.dispatch({
+          effects: Config.setAiAutoCompleteSuggestion.of({
+            text: 'completionSuggestion',
+            from: 0,
+            rpcGlobalId: 2,
+            sampleId: 1,
+            startTime: performance.now(),
+            onImpression: () => {},
+            source: Config.AiSuggestionSource.COMPLETION,
+          }),
+        });
+        editor.editor.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {key}));
+
+        assert.strictEqual(editor.state.doc.toString(), '');
+        assert.isNotNull(editor.editor.state.field(Config.aiAutoCompleteSuggestionState));
+        sinon.assert.notCalled(registerUserAcceptanceSpy);
+        provider.dispose();
+      });
+    }
 
     it('dismisses suggestion on Escape', async () => {
       const {editor, provider} = createEditorWithProvider('');

@@ -53,7 +53,7 @@ ts_library("my_feature") {
   Non-TypeScript build dependencies such as asset generators, copy actions, or CSS compilation targets that must complete before compiling this library.
 
 - **`testonly`** (`boolean`, optional):
-  Set to `true` for unit tests and test helpers (`testonly = true`). Compiling with `testonly = true` automatically includes type definitions for Mocha, Chai, Sinon, and Node.
+  Set to `true` for unit tests and test helpers (`testonly = true`). Compiling with `testonly = true` adds the type definitions of Mocha, Chai and Sinon to the inputs of the target. They are not declared globally: tests import `describe`, `it`, etc. from `mocha` (or from the Mocha interface of their test suite).
 
 - **`runs_in`** (`string`, optional):
   Specifies the execution environment for scripts/tools running in Node.js. Allowed value is `"node"`. Omitting the flag implies running in the browser.
@@ -68,7 +68,7 @@ ts_library("my_feature") {
   Like `inputs`, but dependents inherit them as inputs as well, directly and transitively through `ts_deps`. Use this for type definitions that the library exposes in its public API, e.g. `//test/conductor:implementation` exposes the Mocha and Puppeteer types to all test targets.
 
 - **`rootdir`** (`string`, optional):
-  Custom root directory for resolving source paths if sources reside in a subfolder. Defaults to `"."`.
+  Custom root directory for resolving source paths if sources reside in a subfolder. Defaults to `"."`. Set it to `target_gen_dir` for sources that a `generated_ts()` target (see `scripts/build/ninja/generated_ts.gni`) writes to the gen dir, and list that target in `deps`.
 
 - **`visibility`** (`list(string)`, optional):
   Standard GN visibility list restricting which targets can depend on this library.

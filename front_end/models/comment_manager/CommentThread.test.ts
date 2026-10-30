@@ -4,6 +4,9 @@
 
 import {assert} from 'chai';
 import {beforeEach, describe, it} from 'mocha';
+import sinon from 'sinon';
+
+import * as Host from '../../core/host/host.js';
 
 import * as CommentManager from './comment_manager.js';
 
@@ -13,27 +16,16 @@ describe('CommentThread', () => {
     textSignature: 'color: red;',
   };
 
-  beforeEach(() => {
-    CommentManager.CommentThread.CommentThread.resetIndex();
-  });
-
-  it('generates non-empty id and only increments index when saved', () => {
-    const draft1 = new CommentManager.CommentThread.CommentThread({
+  it('generates a non-empty unique id', () => {
+    const thread1 = new CommentManager.CommentThread.CommentThread({
       anchor: defaultAnchor,
     });
-    assert.isNotEmpty(draft1.id);
-    assert.strictEqual(draft1.index, 1);
-
-    // Another draft before saving draft1 still sees index 1
-    const draft2 = new CommentManager.CommentThread.CommentThread({
+    const thread2 = new CommentManager.CommentThread.CommentThread({
       anchor: defaultAnchor,
     });
-    assert.strictEqual(draft2.index, 1);
-
-    // Saving draft2 claims index 1 and increments next index to 2
-    draft2.save('Saved comment');
-    assert.strictEqual(draft2.index, 1);
-    assert.strictEqual(draft1.index, 2);
+    assert.isNotEmpty(thread1.id);
+    assert.isNotEmpty(thread2.id);
+    assert.notStrictEqual(thread1.id, thread2.id);
   });
 
   it('defaults status to DRAFT and transmitted to false', () => {
@@ -43,6 +35,22 @@ describe('CommentThread', () => {
     assert.strictEqual(thread.status, 'DRAFT');
     assert.isFalse(thread.transmitted);
     assert.isEmpty(thread.comments);
+  });
+
+  it('markTransmitted() sets transmitted and dispatches CHANGED only once', () => {
+    const thread = new CommentManager.CommentThread.CommentThread({
+      anchor: defaultAnchor,
+    });
+    const changedSpy = sinon.spy();
+    thread.addEventListener(CommentManager.CommentThread.Events.CHANGED, changedSpy);
+
+    thread.markTransmitted();
+    assert.isTrue(thread.transmitted);
+    sinon.assert.calledOnce(changedSpy);
+
+    thread.markTransmitted();
+    assert.isTrue(thread.transmitted);
+    sinon.assert.calledOnce(changedSpy);
   });
 
   it('save() transitions status from DRAFT to ACTIVE and dispatches CHANGED event', () => {
@@ -104,6 +112,51 @@ describe('CommentThread', () => {
        assert.isEmpty(thread2.comments);
      });
 
+  it('markResponseSeen() marks the response of a RESOLVED thread as seen and dispatches CHANGED once', () => {
+    let changeCount = 0;
+    const thread = new CommentManager.CommentThread.CommentThread({
+      anchor: defaultAnchor,
+    });
+    thread.addEventListener(CommentManager.CommentThread.Events.CHANGED, () => {
+      changeCount++;
+    });
+    assert.isFalse(thread.responseSeen);
+
+    // No-op before the thread is resolved.
+    thread.sendToAgent('Fix this');
+    changeCount = 0;
+    thread.markResponseSeen();
+    assert.isFalse(thread.responseSeen);
+    assert.strictEqual(changeCount, 0);
+
+    thread.resolve('Fixed');
+    assert.isFalse(thread.responseSeen);
+    changeCount = 0;
+
+    thread.markResponseSeen();
+    assert.isTrue(thread.responseSeen);
+    assert.strictEqual(changeCount, 1);
+
+    // Marking again does not dispatch CHANGED.
+    thread.markResponseSeen();
+    assert.strictEqual(changeCount, 1);
+  });
+
+  it('resolve() marks the response as unseen again only when there is a new reply', () => {
+    const thread = new CommentManager.CommentThread.CommentThread({
+      anchor: defaultAnchor,
+    });
+    thread.sendToAgent('Fix this');
+    thread.resolve('Fixed');
+    thread.markResponseSeen();
+
+    thread.resolve();
+    assert.isTrue(thread.responseSeen);
+
+    thread.resolve('Fixed again');
+    assert.isFalse(thread.responseSeen);
+  });
+
   it('save(text) appends comment, transitions DRAFT to ACTIVE, and dispatches CHANGED event', () => {
     let changeCount = 0;
     const thread = new CommentManager.CommentThread.CommentThread({
@@ -135,7 +188,6 @@ describe('CommentThread', () => {
        assert.strictEqual(thread1.status, 'DRAFT');
        thread1.sendToAgent('Send from draft');
        assert.strictEqual(thread1.status, 'SENT_TO_AGENT');
-       assert.strictEqual(thread1.index, 1);
        assert.strictEqual(changeCount, 1);
        assert.lengthOf(thread1.comments, 1);
        assert.strictEqual(thread1.comments[0].text, 'Send from draft');
@@ -145,17 +197,15 @@ describe('CommentThread', () => {
        assert.strictEqual(thread1.status, 'SENT_TO_AGENT');
        assert.strictEqual(changeCount, 1);
 
-       // Transition from ACTIVE (saved) to SENT_TO_AGENT preserves saved index
+       // Transition from ACTIVE (saved) to SENT_TO_AGENT
        const thread2 = new CommentManager.CommentThread.CommentThread({
          anchor: defaultAnchor,
        });
        thread2.save();
        assert.strictEqual(thread2.status, 'ACTIVE');
-       assert.strictEqual(thread2.index, 2);
 
        thread2.sendToAgent();
        assert.strictEqual(thread2.status, 'SENT_TO_AGENT');
-       assert.strictEqual(thread2.index, 2);
      });
 
   it('editComment() replaces the developer comment text of an ACTIVE thread and dispatches CHANGED', () => {
@@ -227,5 +277,116 @@ describe('CommentThread', () => {
     assert.lengthOf(thread.comments, 1);
     assert.strictEqual(thread.comments[0].text, 'Original');
     assert.strictEqual(changeCount, 0);
+  });
+});
+
+describe('CommentThread UMA', () => {
+  const anchor: CommentManager.CommentThread.CommentAnchorSignature = {
+    vePath: 'Panel: elements > TreeItem: rule',
+  };
+
+  let commentCreated: sinon.SinonStub;
+  let commentSize: sinon.SinonStub;
+
+  beforeEach(() => {
+    commentCreated = sinon.stub(Host.userMetrics, 'commentCreated');
+    commentSize = sinon.stub(Host.userMetrics, 'commentSize');
+  });
+
+  it('records CommentCreated and CommentSize once when a draft is saved', () => {
+    const thread = new CommentManager.CommentThread.CommentThread({anchor});
+    thread.save('  Make this blue  ');
+    thread.save('Follow-up');
+    thread.sendToAgent();
+
+    sinon.assert.calledOnceWithExactly(commentCreated, 1);
+    sinon.assert.calledOnceWithExactly(commentSize, 'Make this blue'.length);
+  });
+
+  it('records CommentCreated and CommentSize when a draft is sent to the agent directly', () => {
+    const thread = new CommentManager.CommentThread.CommentThread({anchor});
+    thread.sendToAgent('Fix padding');
+
+    sinon.assert.calledOnceWithExactly(commentCreated, 1);
+    sinon.assert.calledOnceWithExactly(commentSize, 'Fix padding'.length);
+  });
+
+  it('does not record CommentCreated for generated comments', () => {
+    const thread = new CommentManager.CommentThread.CommentThread({
+      anchor,
+      comments: [{author: 'DEVELOPER', text: 'Changed color', timestamp: 0}],
+      isGeneratedComment: true,
+    });
+    thread.save();
+
+    sinon.assert.notCalled(commentCreated);
+    sinon.assert.notCalled(commentSize);
+  });
+
+  it('does not record CommentCreated or CommentSize for drafts without developer text', () => {
+    const whitespaceThread = new CommentManager.CommentThread.CommentThread({
+      anchor,
+      comments: [{author: 'DEVELOPER', text: '   ', timestamp: 0}],
+    });
+    whitespaceThread.save();
+
+    const emptyThread = new CommentManager.CommentThread.CommentThread({anchor});
+    emptyThread.save();
+
+    sinon.assert.notCalled(commentCreated);
+    sinon.assert.notCalled(commentSize);
+  });
+
+  it('does not record CommentCreated for drafts that are never saved', () => {
+    const thread = new CommentManager.CommentThread.CommentThread({anchor});
+    thread.editComment('ignored');
+
+    sinon.assert.notCalled(commentCreated);
+  });
+
+  describe('CommentThread CommentQueued UMA', () => {
+    const anchor: CommentManager.CommentThread.CommentAnchorSignature = {
+      vePath: 'Panel: elements > TreeItem: rule',
+    };
+
+    let commentQueued: sinon.SinonStub;
+
+    beforeEach(() => {
+      commentQueued = sinon.stub(Host.userMetrics, 'commentQueued');
+    });
+
+    it('records once when a draft is queued', () => {
+      const thread = new CommentManager.CommentThread.CommentThread({anchor});
+      thread.save('Make this blue');
+      thread.save('Follow-up');
+      thread.sendToAgent();
+
+      sinon.assert.calledOnceWithExactly(commentQueued, 1);
+    });
+
+    it('does not record when a draft is sent to the agent directly', () => {
+      const thread = new CommentManager.CommentThread.CommentThread({anchor});
+      thread.sendToAgent('Fix padding');
+
+      sinon.assert.notCalled(commentQueued);
+    });
+
+    it('does not record for generated comments', () => {
+      const thread = new CommentManager.CommentThread.CommentThread({
+        anchor,
+        comments: [{author: 'DEVELOPER', text: 'Changed color', timestamp: 0}],
+        isGeneratedComment: true,
+      });
+      thread.save();
+
+      sinon.assert.notCalled(commentQueued);
+    });
+
+    it('does not record for empty text', () => {
+      const thread = new CommentManager.CommentThread.CommentThread({anchor});
+      thread.save('   ');
+
+      sinon.assert.notCalled(commentQueued);
+    });
   });
 });

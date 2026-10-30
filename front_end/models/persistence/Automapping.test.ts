@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
-import {beforeEach, describe, it} from 'mocha';
+import {afterEach, beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Common from '../../core/common/common.js';
@@ -34,6 +34,10 @@ describe('Automapping', () => {
     backend = new MockDebuggerBackend();
     // Eagerly instantiate persistence so it registers listeners on the workspace before we add files.
     void backend.universe.persistence;
+  });
+
+  afterEach(() => {
+    backend.universe.dispose();
   });
 
   it('correctly maps sourcemap sources even when compiled URL matches one of the source URLs', async () => {
@@ -954,11 +958,10 @@ describe('Automapping', () => {
 
     // Stub renameFile on the platform file system to succeed.
     const platformFileSystem = fileSystemProject.fileSystem();
-    const renameStub = sinon.stub(platformFileSystem, 'renameFile').callsFake((path, newName, callback) => {
+    sinon.stub(platformFileSystem, 'renameFile').callsFake((path, newName, callback) => {
       callback(true, newName);
     });
-    const contentTypeStub =
-        sinon.stub(platformFileSystem, 'contentType').returns(Common.ResourceType.resourceTypes.Script);
+    sinon.stub(platformFileSystem, 'contentType').returns(Common.ResourceType.resourceTypes.Script);
 
     // 3. Rename the file system resource to bar.js.
     const newName = 'bar.js' as Platform.DevToolsPath.RawPathString;
@@ -984,9 +987,6 @@ describe('Automapping', () => {
     assert.strictEqual(bindings[1].network, networkSourceCode);
     assert.strictEqual(bindings[1].fileSystem, fileSystemSourceCode);
     assert.strictEqual(fileSystemSourceCode.url(), fileURL);
-
-    renameStub.restore();
-    contentTypeStub.restore();
   });
   it('correctly maps sourcemap sources with non-exact match', async () => {
     const cssContent = 'body { color: red; }';

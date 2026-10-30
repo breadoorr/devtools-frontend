@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import * as Common from '../../core/common/common.js';
+import * as Host from '../../core/host/host.js';
 
 import {
   type Comment,
@@ -47,11 +48,6 @@ export class CommentManager extends Common.ObjectWrapper.ObjectWrapper<EventType
   #commentMode = false;
   #agentAttached = false;
 
-  constructor() {
-    super();
-    CommentThread.resetIndex();
-  }
-
   #onThreadChanged(): void {
     this.dispatchEventToListeners(Events.COMMENT_THREADS_CHANGED, this.getCommentThreads());
   }
@@ -92,12 +88,12 @@ export class CommentManager extends Common.ObjectWrapper.ObjectWrapper<EventType
       author: 'DEVELOPER'|'AGENT' = 'DEVELOPER',
       isGeneratedComment?: boolean,
       ): CommentThread {
-    const comments: Comment[] = text ? [{
+    const comments: Comment[] = text !== undefined ? [{
       author,
       text,
       timestamp: Date.now(),
     }] :
-                                       [];
+                                                     [];
     const thread = new CommentThread({
       anchor,
       comments,
@@ -122,9 +118,17 @@ export class CommentManager extends Common.ObjectWrapper.ObjectWrapper<EventType
     const threads: CommentThread[] = [];
     for (const thread of this.#commentThreads.values()) {
       if (thread.status === 'SENT_TO_AGENT' && !thread.transmitted) {
-        thread.transmitted = true;
+        thread.markTransmitted();
         threads.push(thread);
       }
+    }
+    const changeCount = threads.filter(thread => thread.isGeneratedComment).length;
+    const commentCount = threads.length - changeCount;
+    if (commentCount > 0) {
+      Host.userMetrics.commentSharedWithAgent(commentCount);
+    }
+    if (changeCount > 0) {
+      Host.userMetrics.changeSharedWithAgent(changeCount);
     }
     return threads;
   }
@@ -141,6 +145,9 @@ export class CommentManager extends Common.ObjectWrapper.ObjectWrapper<EventType
     const thread = this.#commentThreads.get(threadId);
     if (!thread) {
       return false;
+    }
+    if (thread.status !== 'RESOLVED') {
+      Host.userMetrics.commentResolved('Agent', 1);
     }
     thread.resolve(replyText);
     return true;
@@ -162,7 +169,6 @@ export class CommentManager extends Common.ObjectWrapper.ObjectWrapper<EventType
       thread.removeEventListener(CommentThreadEvents.CHANGED, this.#onThreadChanged, this);
     }
     this.#commentThreads.clear();
-    CommentThread.resetIndex();
     this.dispatchEventToListeners(Events.COMMENT_THREADS_CHANGED, []);
   }
 }

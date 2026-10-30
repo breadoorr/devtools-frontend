@@ -18,6 +18,8 @@ generate_css("css_files") {
     "./components/exploreWidget.css",
     "./components/exportForAgentsDialog.css",
     "./components/optInChangeDialog.css",
+    "./components/permissionPrompt.css",
+    "./components/relevantDataDisclaimer.css",
     "./components/walkthroughView.css",
   ]
 }
@@ -39,7 +41,8 @@ devtools_ui_module("ai_assistance") {
     "components/MarkdownRendererWithCodeBlock.ts",
     "components/OptInChangeDialog.ts",
     "components/PerformanceAgentMarkdownRenderer.ts",
-    "components/StylingAgentMarkdownRenderer.ts",
+    "components/PermissionPrompt.ts",
+    "components/RelevantDataDisclaimer.ts",
     "components/WalkthroughUtils.ts",
     "components/WalkthroughView.ts",
   ]
@@ -81,7 +84,6 @@ devtools_ui_module("ai_assistance") {
     "../../ui/components/spinners:bundle",
     "../../ui/components/tooltips:bundle",
     "../../ui/helpers:bundle",
-    "../../ui/i18n:bundle",
     "../../ui/kit:bundle",
     "../../ui/legacy:bundle",
     "../../ui/legacy/components/perf_ui:bundle",
@@ -104,7 +106,6 @@ devtools_entrypoint("bundle") {
     "../../entrypoints/*",
     "../../testing/*",
     "../../ui/components/docs/ai_assistance/*",
-    "../console/*",
     "../explain",
   ]
 
@@ -119,7 +120,7 @@ devtools_entrypoint("meta") {
     "../../core/common:bundle",
     "../../core/i18n:bundle",
     "../../core/root:bundle",
-    "../../models/ai_assistance:bundle",
+    "../../models/ai-utils:bundle",
     "../../ui/legacy:bundle",
     "../../ui/settings:bundle",
   ]
@@ -145,9 +146,13 @@ devtools_ui_module("unittests") {
     "components/ImageResize.test.ts",
     "components/MarkdownRendererWithCodeBlock.test.ts",
     "components/OptInChangeDialog.test.ts",
+    "components/PermissionPrompt.test.ts",
+    "components/RelevantDataDisclaimer.test.ts",
     "components/WalkthroughUtils.test.ts",
     "components/WalkthroughView.test.ts",
   ]
+
+  data = [ "AiAssistancePanel.snapshot.txt" ]
 
   ts_deps = [
     ":bundle",
@@ -179,4 +184,5 @@ devtools_ui_module("unittests") {
     "../timeline:bundle",
     "../timeline/components:bundle",
   ]
+  deps = [ ":css_files" ]
 }

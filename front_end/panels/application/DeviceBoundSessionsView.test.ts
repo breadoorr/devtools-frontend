@@ -20,15 +20,13 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
   const mockSessionId = 'session-id-123';
   const mockSite = 'https://example.com';
 
-  let toLocaleStringStub: sinon.SinonStub;
   beforeEach(async () => {
     const original = Date.prototype.toLocaleString;
-    toLocaleStringStub = sinon.stub(Date.prototype, 'toLocaleString').callsFake(function(this: Date) {
+    sinon.stub(Date.prototype, 'toLocaleString').callsFake(function(this: Date) {
       return original.call(this, 'en-US', {timeZone: 'UTC'});
     });
   });
   afterEach(async () => {
-    toLocaleStringStub.restore();
     cleanTestDOM();
     await raf();
   });
@@ -400,23 +398,21 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
 
     const targetWidget = new UI.Widget.VBox();
     renderElementIntoDOM(targetWidget);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, targetWidget.contentElement);
 
     const dataGrid = customElements.get('devtools-data-grid');
     assert.exists(dataGrid);
     assert.isFunction(dataGrid.prototype.deselectRow);
     const deselectSpy = sinon.spy(dataGrid.prototype, 'deselectRow');
 
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(
-        {...viewInput, selectedEvent: eventWrapper1.event}, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW({...viewInput, selectedEvent: eventWrapper1.event}, undefined,
+                                                     targetWidget.contentElement);
     sinon.assert.notCalled(deselectSpy);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(
-        {...viewInput, selectedEvent: eventWrapper2.event}, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW({...viewInput, selectedEvent: eventWrapper2.event}, undefined,
+                                                     targetWidget.contentElement);
     sinon.assert.notCalled(deselectSpy);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, targetWidget.contentElement);
     sinon.assert.calledOnce(deselectSpy);
-
-    deselectSpy.restore();
   });
 
   it('renders session correctly', async () => {
@@ -430,7 +426,7 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
     targetWidget.element.style.width = '800px';
     targetWidget.element.style.height = '800px';
     renderElementIntoDOM(targetWidget);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, targetWidget.contentElement);
     await assertScreenshot('application/DeviceBoundSessionsView/session.png');
   });
 
@@ -462,7 +458,7 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
     targetWidget.element.style.width = '800px';
     targetWidget.element.style.height = '400px';
     renderElementIntoDOM(targetWidget);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, targetWidget.contentElement);
     await assertScreenshot('application/DeviceBoundSessionsView/events.png');
   });
 
@@ -478,7 +474,7 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
     targetWidget.element.style.width = '800px';
     targetWidget.element.style.height = '850px';
     renderElementIntoDOM(targetWidget);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, targetWidget.contentElement);
     await assertScreenshot('application/DeviceBoundSessionsView/session_and_events.png');
   });
 
@@ -492,7 +488,7 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
     targetWidget.element.style.width = '300px';
     targetWidget.element.style.height = '300px';
     renderElementIntoDOM(targetWidget);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, targetWidget.contentElement);
     await assertScreenshot('application/DeviceBoundSessionsView/default_view.png');
   });
 
@@ -511,7 +507,7 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
     targetWidget.element.style.height = '800px';
 
     renderElementIntoDOM(targetWidget);
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, targetWidget.contentElement);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, targetWidget.contentElement);
     await assertScreenshot(`application/DeviceBoundSessionsView/session_and_events_and_event_details.png`);
   });
 
@@ -528,7 +524,7 @@ describeWithEnvironment('DeviceBoundSessionsView', () => {
       onEventRowSelected: () => {},
     };
     const target = document.createElement('div');
-    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, {}, target);
+    Application.DeviceBoundSessionsView.DEFAULT_VIEW(viewInput, undefined, target);
     const eventDetailContents = target.querySelector('.device-bound-session-sidebar');
     assert.isNotNull(eventDetailContents);
 

@@ -362,26 +362,23 @@ async function buildLayoutShiftsClusters(): Promise<void> {
         navigationId = Types.Events.NO_NAVIGATION;
       }
 
-      clusters.push(Helpers.SyntheticEvents.SyntheticEventsManager
-                        .registerSyntheticEvent<Types.Events.SyntheticLayoutShiftCluster>({
-                          name: 'SyntheticLayoutShiftCluster',
-                          // Will be replaced by the worst layout shift in the next for loop.
-                          rawSourceEvent: event,
-                          events: [],
-                          clusterWindow: traceWindowFromTime(clusterStartTime),
-                          clusterCumulativeScore: 0,
-                          scoreWindows: {
-                            good: traceWindowFromTime(clusterStartTime),
-                          },
-                          navigationId,
-                          // Set default Event so that this event is treated accordingly for the track appender.
-                          ts: event.ts,
-                          pid: event.pid,
-                          tid: event.tid,
-                          ph: Types.Events.Phase.COMPLETE,
-                          cat: '',
-                          dur: Types.Timing.Micro(-1),  // This `cluster.dur` is updated below.
-                        }));
+      clusters.push({
+        name: 'SyntheticLayoutShiftCluster',
+        events: [],
+        clusterWindow: traceWindowFromTime(clusterStartTime),
+        clusterCumulativeScore: 0,
+        scoreWindows: {
+          good: traceWindowFromTime(clusterStartTime),
+        },
+        navigationId,
+        // Set default Event so that this event is treated accordingly for the track appender.
+        ts: event.ts,
+        pid: event.pid,
+        tid: event.tid,
+        ph: Types.Events.Phase.COMPLETE,
+        cat: '',
+        dur: Types.Timing.Micro(-1),  // This `cluster.dur` is updated below.
+      });
 
       firstShiftTime = clusterStartTime;
     }
@@ -510,15 +507,10 @@ async function buildLayoutShiftsClusters(): Promise<void> {
     // Update the cluster's worst layout shift.
     if (worstShiftEvent) {
       cluster.worstShiftEvent = worstShiftEvent;
-      cluster.rawSourceEvent = worstShiftEvent.rawSourceEvent;
     }
 
-    // layout shifts are already sorted by time ascending.
-    // Capture the time range of the cluster.
-    cluster.ts = cluster.events[0].ts;
-    const lastShiftTimings = Helpers.Timing.eventTimingsMicroSeconds(cluster.events[cluster.events.length - 1]);
-    // Add MAX_SHIFT_TIME_DELTA, the section gap after the last layout shift. This marks the end of the cluster.
-    cluster.dur = Types.Timing.Micro((lastShiftTimings.endTime - cluster.events[0].ts) + MAX_SHIFT_TIME_DELTA);
+    cluster.ts = cluster.clusterWindow.min;
+    cluster.dur = cluster.clusterWindow.range;
 
     if (weightedScore > sessionMaxScore) {
       clsWindowID = windowID;

@@ -8,7 +8,7 @@ import * as Common from '../../../core/common/common.js';
 import * as Host from '../../../core/host/host.js';
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Root from '../../../core/root/root.js';
-import * as AIAssistance from '../../../models/ai_assistance/ai_assistance.js';
+import * as AIAssistance from '../../../models/ai-utils/ai-utils.js';
 import * as AiCodeGeneration from '../../../models/ai_code_generation/ai_code_generation.js';
 import * as UI from '../../legacy/legacy.js';
 import {html, type LitTemplate, nothing, render} from '../../lit/lit.js';
@@ -114,7 +114,7 @@ export interface ViewInput {
   onDismiss: (event: Event) => void;
 }
 
-export type View = (input: ViewInput, output: object, target: HTMLElement) => void;
+export type View = (input: ViewInput, output: undefined, target: HTMLElement) => void;
 
 export const DEFAULT_VIEW: View = (input, _output, target) => {
   if (input.aidaAvailability !== Host.AidaClient.AidaAccessPreconditions.AVAILABLE) {
@@ -308,13 +308,12 @@ export class AiCodeCompletionTeaser extends UI.Widget.Widget {
   };
 
   override performUpdate(): void {
-    const output = {};
     this.#view({
       aidaAvailability: this.#aidaAvailability,
       onAction: this.onAction,
       onDismiss: this.onDismiss,
     },
-               output, this.contentElement);
+               undefined, this.contentElement);
   }
 
   override wasShown(): void {

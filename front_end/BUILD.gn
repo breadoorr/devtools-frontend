@@ -58,9 +58,12 @@ node_action("devtools_json") {
 
   script = "scripts/build/generate_devtools_json.mjs"
 
-  args = [ rebase_path(
-          "$target_gen_dir/.well-known/appspecific/com.chrome.devtools.json",
-          root_build_dir) ]
+  args = [
+    "--output",
+    rebase_path(
+        "$target_gen_dir/.well-known/appspecific/com.chrome.devtools.json",
+        root_build_dir),
+  ]
 
   outputs =
       [ "$target_gen_dir/.well-known/appspecific/com.chrome.devtools.json" ]
@@ -112,6 +115,7 @@ copy_to_gen_with_grd("embedder-scripts") {
 group("unittests") {
   testonly = true
   deps = [
+    ":color_tokens",
     ":foundation_unittests",
     "Images:optimize_images",
     "core/sdk:unittests",
@@ -119,6 +123,7 @@ group("unittests") {
     "entrypoints/main:unittests",
     "entrypoints/node_app/app:unittests",
     "entrypoints/wasmparser_worker:unittests",
+    "models/ai-utils:unittests",
     "models/ai_assistance:unittests",
     "panels/accessibility:unittests",
     "panels/ai_assistance:unittests",
@@ -256,6 +261,7 @@ group("foundation_unittests") {
     "entrypoints/formatter_worker:unittests",
     "entrypoints/heap_snapshot_worker:unittests",
     "foundation:unittests",
+    "models/ai-utils:foundation_unittests",
     "models/ai_assistance:foundation_unittests",
     "models/ai_code_completion:foundation_unittests",
     "models/ai_code_generation:foundation_unittests",
@@ -313,6 +319,7 @@ group("api_tests") {
 generated_file("api_test_inputs") {
   testonly = true
   outputs = [ "$target_gen_dir/api_tests.txt" ]
+  data = outputs
   data_keys = [ "tests" ]
   rebase = target_gen_dir
 
@@ -322,6 +329,7 @@ generated_file("api_test_inputs") {
 generated_file("foundation_test_inputs") {
   testonly = true
   outputs = [ "$target_gen_dir/foundation_tests.txt" ]
+  data = outputs
   data_keys = [ "tests" ]
   rebase = target_gen_dir
 
@@ -331,6 +339,7 @@ generated_file("foundation_test_inputs") {
 generated_file("test_inputs") {
   testonly = true
   outputs = [ "$target_gen_dir/tests.txt" ]
+  data = outputs
   data_keys = [ "tests" ]
   rebase = target_gen_dir
 

@@ -39,7 +39,7 @@ export interface MediaQueryMarker {
   locations: SDK.CSSModel.CSSLocation[];
 }
 
-export const DEFAULT_VIEW = (input: ViewInput, _output: object, target: DocumentFragment): void => {
+export const DEFAULT_VIEW = (input: ViewInput, _output: undefined, target: DocumentFragment): void => {
   const createBarClassMap = (marker: MediaQueryMarker): Record<string, boolean> => ({
     'media-inspector-bar': true,
     'media-inspector-marker-inactive': !marker.active,
@@ -159,6 +159,8 @@ export class MediaQueryInspector extends UI.Widget.Widget<ShadowRoot> implements
     SDK.TargetManager.SDKModelObserver<SDK.CSSModel.CSSModel> {
   private readonly view: typeof DEFAULT_VIEW;
   readonly mediaThrottler: Common.Throttler.Throttler = new Common.Throttler.Throttler(0);
+  readonly #targetManager = SDK.TargetManager.TargetManager.instance();
+  readonly #zoomManager = UI.ZoomManager.ZoomManager.instance();
   #getWidthCallback?: () => number;
   #setWidthCallback?: (arg0: number) => void;
   #scale: number;
@@ -166,14 +168,10 @@ export class MediaQueryInspector extends UI.Widget.Widget<ShadowRoot> implements
   private cachedQueryModels?: MediaQueryUIModel[];
 
   constructor(element?: HTMLElement,
-              view: (input: ViewInput, _output: object, target: DocumentFragment) => void = DEFAULT_VIEW) {
+              view: (input: ViewInput, _output: undefined, target: DocumentFragment) => void = DEFAULT_VIEW) {
     super(element, {useShadowDom: 'pure'});
     this.view = view;
     this.#scale = 1;
-
-    SDK.TargetManager.TargetManager.instance().observeModels(SDK.CSSModel.CSSModel, this);
-    UI.ZoomManager.ZoomManager.instance().addEventListener(
-        UI.ZoomManager.Events.ZOOM_CHANGED, this.requestUpdate.bind(this), this);
   }
 
   get getWidthCallback(): (() => number)|undefined {
@@ -378,9 +376,21 @@ export class MediaQueryInspector extends UI.Widget.Widget<ShadowRoot> implements
 
   override wasShown(): void {
     super.wasShown();
+    this.#targetManager.observeModels(SDK.CSSModel.CSSModel, this);
+    this.#zoomManager.addEventListener(UI.ZoomManager.Events.ZOOM_CHANGED, this.requestUpdate, this);
     this.scheduleMediaQueriesUpdate();
     // TODO(crbug.com/407750803): Revisit once DeviceModeView is migrated.
     this.performUpdate();  // Trigger a manual update eagerly, DeviceModeView needs to measure our height.
+  }
+
+  override willHide(): void {
+    super.willHide();
+    this.#targetManager.unobserveModels(SDK.CSSModel.CSSModel, this);
+    // `unobserveModels()` doesn't call `modelRemoved()`, so stop listening to the CSS model explicitly.
+    if (this.cssModel) {
+      this.modelRemoved(this.cssModel);
+    }
+    this.#zoomManager.removeEventListener(UI.ZoomManager.Events.ZOOM_CHANGED, this.requestUpdate, this);
   }
 
   override performUpdate(): void {
@@ -389,14 +399,13 @@ export class MediaQueryInspector extends UI.Widget.Widget<ShadowRoot> implements
     }
     const markers = Map.groupBy(this.buildMediaQueryMarkers(), marker => marker.model.section());
 
-    this.view(
-        {
-          zoomFactor: this.zoomFactor(),
-          markers,
-          onMediaQueryClicked: this.onMediaQueryClicked.bind(this),
-          onContextMenu: this.onContextMenu.bind(this),
-        },
-        {}, this.contentElement);
+    this.view({
+      zoomFactor: this.zoomFactor(),
+      markers,
+      onMediaQueryClicked: this.onMediaQueryClicked.bind(this),
+      onContextMenu: this.onContextMenu.bind(this),
+    },
+              undefined, this.contentElement);
   }
 }
 

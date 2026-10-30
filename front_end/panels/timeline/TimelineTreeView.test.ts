@@ -4,13 +4,16 @@
 
 import {assert} from 'chai';
 import {after, afterEach, before, describe, it} from 'mocha';
+import sinon from 'sinon';
 
+import * as Common from '../../core/common/common.js';
 import * as Trace from '../../models/trace/trace.js';
-import {assertScreenshot} from '../../testing/DOMHelpers.js';
+import {assertScreenshot, renderElementIntoDOM} from '../../testing/DOMHelpers.js';
 import {deinitializeGlobalVars, initializeGlobalVars} from '../../testing/EnvironmentHelpers.js';
 import {allThreadEntriesInTrace, renderWidgetInVbox} from '../../testing/TraceHelpers.js';
 import {TraceLoader} from '../../testing/TraceLoader.js';
 import * as RenderCoordinator from '../../ui/components/render_coordinator/render_coordinator.js';
+import * as UI from '../../ui/legacy/legacy.js';
 
 import * as Timeline from './timeline.js';
 
@@ -174,6 +177,31 @@ describe('TimelineTreeView', function() {
 
       assert.lengthOf(bottomUpTreeView.dataGrid.rootNode().children, 2);
     });
+
+    it('only listens to the group-by setting while shown and refreshes when re-shown', function() {
+      const parsedTrace = syncLikeTimingsParsedTrace;
+      const bottomUpTreeView = new Timeline.TimelineTreeView.BottomUpTimelineTreeView();
+      const consoleTimings = [...parsedTrace.data.UserTimings.consoleTimings];
+      const startTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.min);
+      const endTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.max);
+      const groupBySetting = Common.Settings.Settings.instance().createSetting(
+          'timeline-tree-group-by', Timeline.TimelineTreeView.AggregatedTimelineTreeView.GroupBy.None);
+      groupBySetting.set(Timeline.TimelineTreeView.AggregatedTimelineTreeView.GroupBy.None);
+
+      renderElementIntoDOM(bottomUpTreeView);
+      bottomUpTreeView.setRange(startTime, endTime);
+      bottomUpTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: null};
+
+      bottomUpTreeView.detach();
+      const refreshTree = sinon.spy(bottomUpTreeView, 'refreshTree');
+      groupBySetting.set(Timeline.TimelineTreeView.AggregatedTimelineTreeView.GroupBy.Category);
+      sinon.assert.notCalled(refreshTree);
+
+      renderElementIntoDOM(bottomUpTreeView);
+      sinon.assert.calledOnce(refreshTree);
+      bottomUpTreeView.detach();
+      groupBySetting.set(Timeline.TimelineTreeView.AggregatedTimelineTreeView.GroupBy.None);
+    });
   });
 
   describe('CallTreeTimelineTreeView', function() {
@@ -246,6 +274,73 @@ describe('TimelineTreeView', function() {
       await RenderCoordinator.done();
 
       assert.isAbove(callTreeView.dataGrid.rootNode().children.length, 0);
+      callTreeView.detach();
+    });
+
+    it('removes data grid selection listeners when hidden', async function() {
+      const parsedTrace = syncLikeTimingsParsedTrace;
+      const callTreeView = new Timeline.TimelineTreeView.CallTreeTimelineTreeView();
+      const consoleTimings = [...parsedTrace.data.UserTimings.consoleTimings];
+      const startTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.min);
+      const endTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.max);
+
+      renderElementIntoDOM(callTreeView);
+      callTreeView.setRange(startTime, endTime);
+      callTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: null};
+      await RenderCoordinator.done();
+
+      for (let i = 0; i < 3; ++i) {
+        callTreeView.detach();
+        renderElementIntoDOM(callTreeView);
+      }
+
+      const rowClicked = sinon.spy();
+      callTreeView.addEventListener(Timeline.TimelineTreeView.TimelineTreeView.Events.TREE_ROW_CLICKED, rowClicked);
+      callTreeView.dataGrid.rootNode().children[0].deselect();
+      rowClicked.resetHistory();
+      callTreeView.dataGrid.rootNode().children[0].select();
+      sinon.assert.calledOnce(rowClicked);
+
+      rowClicked.resetHistory();
+      callTreeView.detach();
+      callTreeView.dataGrid.rootNode().children[0].deselect();
+      callTreeView.dataGrid.rootNode().children[0].select();
+      sinon.assert.notCalled(rowClicked);
+    });
+
+    it('renders the heaviest stack sidebar when a node is selected after showing the placeholder', async function() {
+      const parsedTrace = syncLikeTimingsParsedTrace;
+      const callTreeView = new Timeline.TimelineTreeView.CallTreeTimelineTreeView();
+      const consoleTimings = [...parsedTrace.data.UserTimings.consoleTimings];
+      const startTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.min);
+      const endTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.max);
+
+      renderWidgetInVbox(callTreeView, {flexAuto: true});
+      callTreeView.splitWidget.showBoth();
+      assert.isNotNull(callTreeView.detailsView.element.querySelector('.empty-state'));
+
+      callTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: null};
+      callTreeView.activeSelection = Timeline.TimelineSelection.selectionFromRangeMilliSeconds(startTime, endTime);
+      await RenderCoordinator.done();
+
+      assert.isNull(callTreeView.detailsView.element.querySelector('.empty-state'));
+      assert.isTrue(callTreeView.detailsView.element.contains(callTreeView.stackView.element));
+      assert.isNotNull(callTreeView.detailsView.element.querySelector('.timeline-stack-view-header'));
+
+      // Filtering out all rows shows the placeholder; clearing the filter restores details.
+      callTreeView.textFilter().setRegExp(/non-existent-event-name/);
+      callTreeView.refreshTree();
+      assert.isNotNull(callTreeView.detailsView.element.querySelector('.empty-state'));
+      assert.isFalse(callTreeView.detailsView.element.contains(callTreeView.stackView.element));
+
+      callTreeView.textFilter().setRegExp(null);
+      callTreeView.refreshTree();
+      await RenderCoordinator.done();
+
+      assert.isNull(callTreeView.detailsView.element.querySelector('.empty-state'));
+      assert.isTrue(callTreeView.detailsView.element.contains(callTreeView.stackView.element));
+      assert.isNotNull(callTreeView.detailsView.element.querySelector('.timeline-stack-view-header'));
+      callTreeView.detach();
     });
   });
 
@@ -416,6 +511,118 @@ describe('TimelineTreeView', function() {
         'https://web.dev/images/favicon.ico',
         'https://region1.google-analytics.com/g/collect?v=2&tid=G-18JR3Q8PJ8&gtm=45je3a40&_p=68725886&cid=1874137241.1685438100&ul=en-gb&sr=3360x1890&uaa=arm&uab=64&uafvl=Not_A%2520Brand%3B8.0.0.0%7CChromium%3B120.0.6049.0%7CGoogle%2520Chrome%3B120.0.6049.0&uamb=0&uam=&uap=macOS&uapv=13.6.0&uaw=0&are=1&dl=https%3A%2F%2Fweb.dev%2F&dp=&sid=1696581003&sct=2&seg=1&dt=web.dev&_s=1',
       ]);
+    });
+  });
+
+  describe('setRange and setter deduplication', function() {
+    it('invokes refreshTree and buildTree once when range changes, and does not invoke when range is identical',
+       function() {
+         const parsedTrace = syncLikeTimingsParsedTrace;
+         const bottomUpTreeView = new Timeline.TimelineTreeView.BottomUpTimelineTreeView();
+         renderWidgetInVbox(bottomUpTreeView, {flexAuto: true});
+         const startTime1 = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.min);
+         const endTime1 = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.max);
+         const startTime2 = Trace.Types.Timing.Milli(startTime1 + 10);
+         const endTime2 = Trace.Types.Timing.Milli(endTime1 - 10);
+         const consoleTimings = [...parsedTrace.data.UserTimings.consoleTimings];
+         bottomUpTreeView.setRange(startTime1, endTime1);
+         bottomUpTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: null};
+
+         const refreshSpy = sinon.spy(bottomUpTreeView, 'refreshTree');
+         const buildSpy = sinon.spy(bottomUpTreeView, 'buildTree');
+
+         // Change both startTime and endTime in a single setRange call.
+         bottomUpTreeView.setRange(startTime2, endTime2);
+         sinon.assert.callCount(refreshSpy, 1);
+         sinon.assert.callCount(buildSpy, 1);
+
+         // Re-invoking setRange with the same bounds must be a no-op.
+         bottomUpTreeView.setRange(startTime2, endTime2);
+         sinon.assert.callCount(refreshSpy, 1);
+         sinon.assert.callCount(buildSpy, 1);
+       });
+
+    it('does not invoke refreshTree when model or setters are updated with unchanged references', function() {
+      const parsedTrace = syncLikeTimingsParsedTrace;
+      const bottomUpTreeView = new Timeline.TimelineTreeView.BottomUpTimelineTreeView();
+      renderWidgetInVbox(bottomUpTreeView, {flexAuto: true});
+      const startTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.min);
+      const endTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.max);
+      const consoleTimings = [...parsedTrace.data.UserTimings.consoleTimings];
+      const mapper = new Trace.EntityMapper.EntityMapper(parsedTrace);
+
+      bottomUpTreeView.setRange(startTime, endTime);
+      bottomUpTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: mapper};
+
+      const refreshSpy = sinon.spy(bottomUpTreeView, 'refreshTree');
+
+      // Setting model with a new object literal containing the same references must not refresh.
+      bottomUpTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: mapper};
+      sinon.assert.callCount(refreshSpy, 0);
+
+      // Setting selectedEvents to the same reference must not refresh.
+      bottomUpTreeView.selectedEvents = consoleTimings;
+      sinon.assert.callCount(refreshSpy, 0);
+
+      // Setting parsedTrace to the same reference must not refresh.
+      bottomUpTreeView.parsedTrace = parsedTrace;
+      sinon.assert.callCount(refreshSpy, 0);
+    });
+
+    it('does not build tree with undefined bounds when model is set before activeSelection is set', function() {
+      const parsedTrace = syncLikeTimingsParsedTrace;
+      const bottomUpTreeView = new Timeline.TimelineTreeView.BottomUpTimelineTreeView();
+      renderWidgetInVbox(bottomUpTreeView, {flexAuto: true});
+
+      const buildSpy = sinon.spy(bottomUpTreeView, 'buildTree');
+      const consoleTimings = [...parsedTrace.data.UserTimings.consoleTimings];
+      bottomUpTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: null};
+
+      // Since bounds are undefined, buildTree should not have been called.
+      sinon.assert.callCount(buildSpy, 0);
+
+      // Setting activeSelection now configures the range and builds the tree once.
+      const sel: Timeline.TimelineSelection.TimeRangeSelection = {
+        bounds: syncLikeTimingsParsedTrace.data.Meta.traceBounds,
+      };
+      bottomUpTreeView.activeSelection = sel;
+      sinon.assert.callCount(buildSpy, 1);
+
+      // Loading a new trace resets the previous trace's bounds and waits for the new trace's selection.
+      const nextTrace = userTimingsParsedTrace;
+      const nextEvents = [...nextTrace.data.UserTimings.performanceMeasures];
+      bottomUpTreeView.model = {selectedEvents: nextEvents, parsedTrace: nextTrace, entityMapper: null};
+      sinon.assert.callCount(buildSpy, 1);
+
+      bottomUpTreeView.activeSelection = {bounds: nextTrace.data.Meta.traceBounds};
+      sinon.assert.callCount(buildSpy, 2);
+    });
+
+    it('defers refreshTree when attached to an unmounted parent and refreshes once shown', function() {
+      const parsedTrace = syncLikeTimingsParsedTrace;
+      const bottomUpTreeView = new Timeline.TimelineTreeView.BottomUpTimelineTreeView();
+      const parentBox = new UI.Widget.VBox();
+      bottomUpTreeView.show(parentBox.element);
+
+      assert.isNotNull(bottomUpTreeView.element.parentElement);
+      assert.isFalse(bottomUpTreeView.isShowing());
+
+      const buildSpy = sinon.spy(bottomUpTreeView, 'buildTree');
+      const startTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.min);
+      const endTime = Trace.Helpers.Timing.microToMilli(parsedTrace.data.Meta.traceBounds.max);
+      const consoleTimings = [...parsedTrace.data.UserTimings.consoleTimings];
+
+      bottomUpTreeView.setRange(startTime, endTime);
+      bottomUpTreeView.model = {selectedEvents: consoleTimings, parsedTrace, entityMapper: null};
+
+      // Since the tree view is not showing, buildTree should not have been called.
+      sinon.assert.callCount(buildSpy, 0);
+
+      const refreshSpy = sinon.spy(bottomUpTreeView, 'refreshTree');
+      renderElementIntoDOM(parentBox);
+      assert.isTrue(bottomUpTreeView.isShowing());
+      sinon.assert.callCount(refreshSpy, 1);
+      sinon.assert.callCount(buildSpy, 1);
     });
   });
 });

@@ -63,8 +63,10 @@ const UIStrings = {
   currentTime: 'Current time',
   /**
    * @description Label for the callback interval statistics in the audio context summary bar.
+   * @example {1.234} PH1
+   * @example {0.567} PH2
    */
-  callbackInterval: 'Callback interval',
+  callbackIntervalS: 'Callback interval: μ = {PH1} ms, σ = {PH2} ms',
   /**
    * @description Label for the render capacity percentage in the audio context summary bar.
    */
@@ -83,7 +85,7 @@ export interface ViewInput {
   contextRealtimeData: Protocol.WebAudio.ContextRealtimeData|null;
 }
 
-export type View = (input: ViewInput, output: object, target: HTMLElement|DocumentFragment) => void;
+export type View = (input: ViewInput, output: undefined, target: HTMLElement|DocumentFragment) => void;
 
 export const DEFAULT_VIEW: View = (input, _output, target) => {
   const {
@@ -168,9 +170,10 @@ export const DEFAULT_VIEW: View = (input, _output, target) => {
             html`<div class="context-summary-container" jslog=${VisualLogging.section('audio-context-summary')}>
             <span>${i18nString(UIStrings.currentTime)}: ${contextRealtimeData.currentTime.toFixed(3)} s</span>
             <span>\u2758</span>
-            <span>${i18nString(UIStrings.callbackInterval)}: μ = ${
-                (contextRealtimeData.callbackIntervalMean * 1000).toFixed(3)} ms, σ = ${
-                (Math.sqrt(contextRealtimeData.callbackIntervalVariance) * 1000).toFixed(3)} ms</span>
+            <span>${i18nString(UIStrings.callbackIntervalS, {
+                PH1: (contextRealtimeData.callbackIntervalMean * 1000).toFixed(3),
+                PH2: (Math.sqrt(contextRealtimeData.callbackIntervalVariance) * 1000).toFixed(3),
+            })}</span>
             <span>\u2758</span>
             <span>${i18nString(UIStrings.renderCapacity)}: ${
                 (contextRealtimeData.renderCapacity * 100).toFixed(3)} %</span>
@@ -232,7 +235,7 @@ export class WebAudioView extends UI.Widget.VBox<ShadowRoot> implements
       onContextSelectorSelectionChanged: this.onContextSelectorSelectionChanged.bind(this),
       contextRealtimeData: this.contextRealtimeData,
     };
-    this.view(input, {}, this.contentElement);
+    this.view(input, undefined, this.contentElement);
   }
 
   private addEventListeners(webAudioModel: WebAudioModel): void {

@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import '../../ui/kit/kit.js';
-import '../../ui/components/menus/menus.js';
 
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
@@ -140,7 +139,7 @@ interface ViewInput {
   displayToolbar?: boolean;
 }
 
-export type View = (input: ViewInput, output: object, target: HTMLElement) => void;
+export type View = (input: ViewInput, output: undefined, target: HTMLElement) => void;
 
 const splitDescription = (description: string): [string, string] => {
   // If the description is too long we make the UI a bit better by highlighting the first sentence
@@ -528,13 +527,13 @@ export class JSONEditor extends JSONEditorBase {
     return {
       box: hintElement.boxInWindow(),
       show: async (popover: UI.GlassPane.GlassPane) => {
-        const popupElement = new ElementsComponents.CSSHintDetailsView.CSSHintDetailsView({
+        const popupWidget = new ElementsComponents.CSSHintDetailsView.CSSHintDetailsView({
           getMessage: () => html`<span>${head}</span>`,
           getPossibleFixMessage: () => popupContent,
           getLearnMoreLink: () =>
               `https://chromedevtools.github.io/devtools-protocol/tot/${this.command.split('.')[0]}/`,
         });
-        popover.contentElement.appendChild(popupElement);
+        popupWidget.show(popover.contentElement);
         return true;
       },
     };
@@ -1008,8 +1007,7 @@ export class JSONEditor extends JSONEditorBase {
       displayCommandInput: this.displayCommandInput,
       displayToolbar: this.displayToolbar,
     };
-    const viewOutput = {};
-    this.#view(viewInput, viewOutput, this.contentElement);
+    this.#view(viewInput, undefined, this.contentElement);
   }
 }
 
@@ -1031,7 +1029,7 @@ function renderTargetSelectorRow(input: ViewInput): Lit.TemplateResult|undefined
             @change=${input.onTargetSelected}>
       ${input.targets.map(target => html`
         <option jslog=${VisualLogging.item('target').track({click: true, resize: true})}
-                value=${target.id()} ?selected=${target.id() === input.targetId}>
+                value=${target.id()} .selected=${target.id() === input.targetId}>
           ${target.name()} (${target.inspectedURL()})
         </option>`)}
     </select>

@@ -420,9 +420,7 @@ export class CoverageView extends UI.Widget.VBox<ShadowRoot> {
 
     const {reload, jsCoveragePerBlock} = {reload: false, jsCoveragePerBlock: false, ...options};
 
-    if (!this.#model || reload) {
-      this.#model = mainTarget.model(CoverageModel);
-    }
+    this.#setModel(mainTarget.model(CoverageModel));
     if (!this.#model) {
       return;
     }
@@ -436,11 +434,11 @@ export class CoverageView extends UI.Widget.VBox<ShadowRoot> {
     }
     this.#selectCoverageType(Boolean(jsCoveragePerBlock));
     this.#model.addEventListener(Events.CoverageUpdated, this.#onCoverageDataReceived, this);
-    this.#model.addEventListener(Events.SourceMapResolved, this.#updateListView, this);
     const resourceTreeModel = mainTarget.model(SDK.ResourceTreeModel.ResourceTreeModel);
     SDK.TargetManager.TargetManager.instance().addModelListener(
         SDK.ResourceTreeModel.ResourceTreeModel, SDK.ResourceTreeModel.Events.PrimaryPageChanged,
         this.#onPrimaryPageChanged, this);
+    this.#decorationManager?.dispose();
     this.#decorationManager = new CoverageDecorationManager(
         this.#model, Workspace.Workspace.WorkspaceImpl.instance(),
         Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance(),
@@ -457,6 +455,19 @@ export class CoverageView extends UI.Widget.VBox<ShadowRoot> {
       resourceTreeModel.reloadPage();
     } else {
       void this.#model.startPolling();
+    }
+  }
+
+  #setModel(model: CoverageModel|null): void {
+    if (this.#model === model) {
+      return;
+    }
+    if (this.#model) {
+      this.#model.removeEventListener(Events.SourceMapResolved, this.#updateListView, this);
+    }
+    this.#model = model;
+    if (this.#model) {
+      this.#model.addEventListener(Events.SourceMapResolved, this.#updateListView, this);
     }
   }
 
@@ -520,13 +531,17 @@ export class CoverageView extends UI.Widget.VBox<ShadowRoot> {
         await this.#model.stop();
         this.#model.removeEventListener(Events.CoverageUpdated, this.#onCoverageDataReceived, this);
       }
-      this.#model = coverageModel;
+      this.#setModel(coverageModel);
+      if (!this.#model) {
+        return;
+      }
       const success = await this.#model.start(this.isBlockCoverageSelected());
       if (!success) {
         return;
       }
 
       this.#model.addEventListener(Events.CoverageUpdated, this.#onCoverageDataReceived, this);
+      this.#decorationManager?.dispose();
       this.#decorationManager = new CoverageDecorationManager(
           this.#model, Workspace.Workspace.WorkspaceImpl.instance(),
           Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance(),

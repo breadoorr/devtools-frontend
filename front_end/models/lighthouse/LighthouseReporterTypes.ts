@@ -46,6 +46,7 @@ export interface CategoryJSON {
   title: string;
   id: string;
   score: number|null;
+  categoryScoreDisplayMode?: 'fraction';
   description?: string;
   manualDescription: string;
   auditRefs: AuditJSON[];
@@ -88,8 +89,44 @@ export interface ReportJSON {
   isImported?: boolean;
 }
 
-export type DetailsJSON =
-    |TableDetailsJSON|OpportunityDetailsJSON|FilmstripDetailsJSON|ScreenshotDetailsJSON|DebugDataDetailsJSON;
+export type DetailsJSON =|TableDetailsJSON|OpportunityDetailsJSON|ListDetailsJSON|ChecklistDetailsJSON|
+    FilmstripDetailsJSON|ScreenshotDetailsJSON|DebugDataDetailsJSON;
+
+export interface ChecklistItemJSON {
+  label: string;
+  value: boolean;
+}
+
+export interface ChecklistDetailsJSON {
+  type: 'checklist';
+  items: Record<string, ChecklistItemJSON>;
+}
+
+export interface TextValueJSON {
+  type: 'text';
+  value: string;
+}
+
+export interface UrlValueJSON {
+  type: 'url';
+  value: string;
+}
+
+export type ListItemValueJSON = DetailsJSON|NodeDetailsJSON|TextValueJSON|UrlValueJSON;
+
+export type ListItemJSON = ListSectionDetailsJSON|ListItemValueJSON;
+
+export interface ListDetailsJSON {
+  type: 'list';
+  items: ListItemJSON[];
+}
+
+export interface ListSectionDetailsJSON {
+  type: 'list-section';
+  title?: string;
+  description?: string;
+  value: ListItemValueJSON;
+}
 
 export interface SubItemsJSON {
   type: 'subitems';
@@ -120,7 +157,8 @@ export interface TableHeadingJSON {
  * Represents the possible values found in an 'item' object
  * based on the 'valueType' specified in headings.
  */
-export type TableItemValue =|string|number|NodeDetailsJSON|SourceLocationDetailsJSON|Platform.DevToolsPath.UrlString;
+export type TableItemValue =
+    |string|number|NodeDetailsJSON|SourceLocationDetailsJSON|TextValueJSON|UrlValueJSON|Platform.DevToolsPath.UrlString;
 
 export interface OpportunityDetailsJSON {
   type: 'opportunity';

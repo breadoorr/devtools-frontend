@@ -12,6 +12,7 @@ import type * as TextUtils from '../../core/text_utils/text_utils.js';
 import type * as Protocol from '../../generated/protocol.js';
 import * as AIAssistance from '../../models/ai_assistance/ai_assistance.js';
 import * as Bindings from '../../models/bindings/bindings.js';
+import * as CommentManager from '../../models/comment_manager/comment_manager.js';
 import * as Trace from '../../models/trace/trace.js';
 import * as Workspace from '../../models/workspace/workspace.js';
 import * as TraceBounds from '../../services/trace_bounds/trace_bounds.js';
@@ -80,8 +81,14 @@ describe('TimelinePanel', function() {
     Timeline.ModificationsManager.ModificationsManager.reset();
     traceModel = Trace.TraceModel.Model.createWithAllHandlers();
     resourceLoader = {loadResource: sinon.stub()} as unknown as SDK.PageResourceLoader.PageResourceLoader;
-    timeline = Timeline.TimelinePanel.TimelinePanel.instance(
-        {forceNew: true, resourceLoader, targetManager, isolateManager, traceModel});
+    timeline = Timeline.TimelinePanel.TimelinePanel.instance({
+      forceNew: true,
+      resourceLoader,
+      targetManager,
+      isolateManager,
+      commentManager: new CommentManager.CommentManager.CommentManager(),
+      traceModel,
+    });
     renderElementIntoDOM(timeline);
   });
 
@@ -322,8 +329,14 @@ describe('TimelinePanel', function() {
 
     it('opens the sidebar once a trace is imported if the user has not seen it before', async function() {
       setupStubs({sidebarHasBeenOpened: false, sidebarIsShowing: false});
-      const timeline = Timeline.TimelinePanel.TimelinePanel.instance(
-          {forceNew: true, resourceLoader, targetManager, isolateManager, traceModel});
+      const timeline = Timeline.TimelinePanel.TimelinePanel.instance({
+        forceNew: true,
+        resourceLoader,
+        targetManager,
+        isolateManager,
+        commentManager: new CommentManager.CommentManager.CommentManager(),
+        traceModel,
+      });
       const showBothStub = sinon.stub(timeline.splitWidget(), 'showBoth').callsFake(() => {});
       const events = await TraceLoader.rawEvents(this, 'web-dev.json.gz') as Trace.Types.Events.Event[];
       await timeline.loadingComplete(events, null, null);
@@ -333,8 +346,14 @@ describe('TimelinePanel', function() {
 
     it('does not open the sidebar if the user has seen it already', async function() {
       setupStubs({sidebarHasBeenOpened: true, sidebarIsShowing: false});
-      const timeline = Timeline.TimelinePanel.TimelinePanel.instance(
-          {forceNew: true, resourceLoader, targetManager, isolateManager, traceModel});
+      const timeline = Timeline.TimelinePanel.TimelinePanel.instance({
+        forceNew: true,
+        resourceLoader,
+        targetManager,
+        isolateManager,
+        commentManager: new CommentManager.CommentManager.CommentManager(),
+        traceModel,
+      });
       const showBothStub = sinon.stub(timeline.splitWidget(), 'showBoth').callsFake(() => {});
       const events = await TraceLoader.rawEvents(this, 'web-dev.json.gz') as Trace.Types.Events.Event[];
       await timeline.loadingComplete(events, null, null);
@@ -355,6 +374,25 @@ describe('TimelinePanel', function() {
 
       await Timeline.TimelinePanel.TimelinePanel.executeRecordAndReload();
       sinon.assert.calledWith(showViewStub, 'timeline');
+    });
+
+    it('brings the primary page target to the front before starting a recording', async function() {
+      const primaryTarget = createTarget({targetManager});
+      try {
+        const uiView = UI.ViewManager.ViewManager.instance({forceNew: true});
+        sinon.stub(uiView, 'showView');
+        const bringToFrontSpy = sinon.spy(primaryTarget.pageAgent(), 'invoke_bringToFront');
+        const recordReloadStub = sinon.stub(timeline, 'recordReload').callsFake(() => {
+          timeline.dispatchEventToListeners(Timeline.TimelinePanel.Events.RECORDING_COMPLETED, {traceIndex: 0});
+        });
+        sinon.stub(traceModel, 'parsedTrace').returns({} as Trace.TraceModel.ParsedTrace);
+
+        await Timeline.TimelinePanel.TimelinePanel.executeRecordAndReload();
+        sinon.assert.calledOnce(bringToFrontSpy);
+        sinon.assert.callOrder(bringToFrontSpy, recordReloadStub);
+      } finally {
+        primaryTarget.dispose('test');
+      }
     });
   });
 
@@ -811,4 +849,30 @@ describe('TimelinePanel', function() {
       sinon.assert.calledTwice(showDialogStub);
     });
   });
+
+  it('detaches StatusDialog from its parent widget when removed', () => {
+    const parentWidget = new UI.Widget.Widget();
+    parentWidget.show(timeline.element);
+    const dialog = new Timeline.StatusDialog.StatusDialog({hideStopButton: true}, () => {});
+    dialog.showPane(parentWidget.element);
+    assert.strictEqual(dialog.parentWidget(), parentWidget);
+    assert.isTrue(dialog.isShowing());
+
+    dialog.remove();
+    assert.isNull(dialog.parentWidget());
+    assert.isFalse(dialog.isShowing());
+  });
+
+  it('hides the flame chart while the status pane overlay is shown and restores it when loading completes',
+     async function() {
+       const events = await TraceLoader.rawEvents(this, 'web-dev.json.gz') as Trace.Types.Events.Event[];
+       await timeline.loadingComplete(events, null, null);
+       assert.isTrue(timeline.getFlameChart().isShowing());
+
+       await timeline.loadingStarted();
+       assert.isFalse(timeline.getFlameChart().isShowing());
+
+       await timeline.loadingComplete(events, null, null);
+       assert.isTrue(timeline.getFlameChart().isShowing());
+     });
 });

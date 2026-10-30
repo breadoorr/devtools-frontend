@@ -55,12 +55,12 @@ const getFieldValuesTextContent = async (devToolsPage: DevToolsPage) => {
   if (fieldValues[10]?.includes('accelerometer')) {
     fieldValues[10] = 'accelerometer';
   }
-  if (fieldValues[11]) {
+  if (fieldValues[12]) {
     // This is the frame's id, which is not deterministic.
-    fieldValues[11] = 'frameId';
+    fieldValues[12] = 'frameId';
   }
   // Make sure the length is equivalent to the expected value below
-  if (fieldValues.length === 12) {
+  if (fieldValues.length === 13) {
     return fieldValues;
   }
   return undefined;
@@ -88,6 +88,7 @@ describe('The Application Tab', () => {
       'unavailable\nrequires cross-origin isolated context',
       'unavailable\nLearn more',
       'accelerometer',
+      'unload\nShow details',
       'frameId',
     ];
 
@@ -204,7 +205,7 @@ describe('The Application Tab', () => {
     await devToolsPage.click(`${OPENED_WINDOWS_SELECTOR} + ol li:first-child`);
 
     const fieldValuesTextContent = await devToolsPage.waitForFunction(async () => {
-      const fieldValues = await getTrimmedTextContent(devToolsPage, '.report-field-value');
+      const fieldValues = await getTrimmedTextContent(devToolsPage, 'devtools-report-value');
       // Make sure the length is equivalent to the expected value below
       if (fieldValues.length === 3 && !fieldValues.includes('')) {
         return fieldValues;
@@ -235,7 +236,7 @@ describe('The Application Tab', () => {
     void devToolsPage.pressKey('ArrowDown');
 
     const fieldValuesTextContent = await devToolsPage.waitForFunction(async () => {
-      const fieldValues = await getTrimmedTextContent(devToolsPage, '.report-field-value');
+      const fieldValues = await getTrimmedTextContent(devToolsPage, 'devtools-report-value');
       // Make sure the length is equivalent to the expected value below
       if (fieldValues.length === 3 && fieldValues.every(field => field.trim() !== '')) {
         return fieldValues;
@@ -258,7 +259,7 @@ describe('The Application Tab', () => {
     void devToolsPage.pressKey('ArrowDown');
 
     const fieldValuesTextContent = await devToolsPage.waitForFunction(async () => {
-      const fieldValues = await getTrimmedTextContent(devToolsPage, '.report-field-value');
+      const fieldValues = await getTrimmedTextContent(devToolsPage, 'devtools-report-value');
       // Make sure the length is equivalent to the expected value below
       if (fieldValues.length === 3 && fieldValues.every(field => field.trim() !== '')) {
         return fieldValues;
@@ -299,6 +300,7 @@ describe('The Application Tab', () => {
       'unavailable\nrequires cross-origin isolated context',
       'unavailable\nLearn more',
       'accelerometer',
+      'unload\nShow details',
       'frameId',
     ];
     assert.deepEqual(fieldValuesTextContent, expected);
@@ -333,6 +335,7 @@ describe('The Application Tab', () => {
       'unavailable\nrequires cross-origin isolated context',
       'unavailable\nLearn more',
       'accelerometer',
+      'unload\nShow details',
       'frameId',
     ];
     assert.deepEqual(fieldValuesTextContent2, expected2);

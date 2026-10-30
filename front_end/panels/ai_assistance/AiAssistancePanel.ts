@@ -62,6 +62,10 @@ const AI_ASSISTANCE_HELP =
     'https://developer.chrome.com/docs/devtools/ai-assistance' as Platform.DevToolsPath.UrlString;
 const WALKTHROUGH_SIDEBAR_BREAKPOINT = 700;
 const WALKTHROUGH_SIDEBAR_INITIAL_WIDTH = 400;
+// Ignores approvals that arrive within this window after a permission prompt appears, so input meant for something
+// else (such as the second click of a double-click on the previous prompt) cannot approve it. The value matches the
+// 500 ms double-click interval that Chromium's InputEventActivationProtector uses for dialog buttons.
+const PERMISSION_PROMPT_INPUT_PROTECTION_MS = 500;
 
 const UIStrings = {
   /**
@@ -594,6 +598,8 @@ export class AiAssistancePanel extends UI.Panel.Panel {
   #serverSideLoggingEnabled = isAiAssistanceServerSideLoggingEnabled();
   #aiAssistanceEnabledSetting: AiAssistanceModel.AiSetting.AiSetting<boolean>;
   #changeManager = new AiAssistanceModel.ChangeManager.ChangeManager();
+  #alwaysAllowedTools =
+      new AiAssistanceModel.AlwaysAllowedTools.AlwaysAllowedTools(Common.Settings.Settings.instance());
   #mutex = new Common.Mutex.Mutex();
 
   #conversation?: AiAssistanceModel.AiConversation.AiConversation;
@@ -982,6 +988,7 @@ export class AiAssistancePanel extends UI.Panel.Panel {
       isReadOnly: false,
       aidaClient: this.#aidaClient,
       changeManager: this.#changeManager,
+      alwaysAllowedTools: this.#alwaysAllowedTools,
       performanceRecordAndReload: this.#handlePerformanceRecordAndReload.bind(this),
       onInspectElement: this.#handleInspectElement.bind(this),
       networkTimeCalculator: NetworkPanel.NetworkPanel.NetworkPanel.instance().networkLogView.timeCalculator(),
@@ -1012,6 +1019,7 @@ export class AiAssistancePanel extends UI.Panel.Panel {
             isReadOnly: false,
             aidaClient: this.#aidaClient,
             changeManager: this.#changeManager,
+            alwaysAllowedTools: this.#alwaysAllowedTools,
             performanceRecordAndReload: this.#handlePerformanceRecordAndReload.bind(this),
             onInspectElement: this.#handleInspectElement.bind(this),
             networkTimeCalculator: NetworkPanel.NetworkPanel.NetworkPanel.instance().networkLogView.timeCalculator(),
@@ -1519,6 +1527,7 @@ export class AiAssistancePanel extends UI.Panel.Panel {
         isReadOnly: false,
         aidaClient: this.#aidaClient,
         changeManager: this.#changeManager,
+        alwaysAllowedTools: this.#alwaysAllowedTools,
         performanceRecordAndReload: this.#handlePerformanceRecordAndReload.bind(this),
         onInspectElement: this.#handleInspectElement.bind(this),
         networkTimeCalculator: NetworkPanel.NetworkPanel.NetworkPanel.instance().networkLogView.timeCalculator(),
@@ -1913,7 +1922,8 @@ export class AiAssistancePanel extends UI.Panel.Panel {
           case AiAssistanceModel.AiAgent.ResponseType.SIDE_EFFECT: {
             step = stepForCall(data.callId);
             const approvalStep = step;
-            approvalStep.code ??= data.code;
+            approvalStep.javascriptCode = data.javascriptCode;
+            const promptShownAt = performance.now();
             approvalStep.state = {
               type: 'needs_approval',
               sideEffectDialog: {
@@ -1921,6 +1931,10 @@ export class AiAssistancePanel extends UI.Panel.Panel {
                 permissionPrompt: data.permissionPrompt,
                 permissionTitle: data.permissionTitle,
                 onAnswer: (decision: AiAssistanceModel.Tool.PermissionDecision) => {
+                  if (decision !== AiAssistanceModel.Tool.PermissionDecision.REJECT &&
+                      performance.now() - promptShownAt < PERMISSION_PROMPT_INPUT_PROTECTION_MS) {
+                    return;
+                  }
                   data.confirm(decision);
                   approvalStep.state = {type: 'completed'};
                   this.requestUpdate();
@@ -1933,7 +1947,7 @@ export class AiAssistancePanel extends UI.Panel.Panel {
           case AiAssistanceModel.AiAgent.ResponseType.ACTION: {
             step = stepForCall(data.callId);
             step.state = data.canceled ? {type: 'canceled'} : {type: 'completed'};
-            step.code ??= data.code;
+            step.action ??= data.action;
             step.output ??= data.output;
             step.widgets ??= data.widgets;
             commitStep();
@@ -1981,7 +1995,7 @@ export class AiAssistancePanel extends UI.Panel.Panel {
             if (systemMessage.parts.length > 1) {
               const firstPart = systemMessage.parts[0];
               if (firstPart.type === 'step' && firstPart.step.state.type === 'in_progress' && !firstPart.step.thought &&
-                  !firstPart.step.code && !firstPart.step.contextDetails) {
+                  !firstPart.step.action && !firstPart.step.contextDetails) {
                 systemMessage.parts.shift();
               }
             }
@@ -2088,8 +2102,8 @@ export function getResponseMarkdown(message: ModelChatMessage): string {
       if (step.thought) {
         contentParts.push(step.thought);
       }
-      if (step.code) {
-        contentParts.push(`**Code executed:**\n\`\`\`\n${step.code.trim()}\n\`\`\``);
+      if (step.action) {
+        contentParts.push(`**Code executed:**\n\`\`\`\n${step.action.trim()}\n\`\`\``);
       }
       if (step.output) {
         contentParts.push(`**Data returned:**\n\`\`\`\n${step.output}\n\`\`\``);

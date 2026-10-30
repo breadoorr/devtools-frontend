@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chai';
-import {afterEach, beforeEach, describe, it} from 'mocha';
+import {beforeEach, describe, it} from 'mocha';
 import sinon from 'sinon';
 
 import * as Root from '../../../core/root/root.js';
@@ -79,6 +79,15 @@ describe('ExecuteJavaScriptTool', () => {
     assertIsResult(response);
     assert.strictEqual(response.result, '{"success": true}');
     sinon.assert.calledOnce(mockExecJs);
+    assert.strictEqual(mockExecJs.firstCall.args[0], `async function ($0, data) {
+  try {
+    console.log("hello")
+    ;
+    return data;
+  } catch (error) {
+    return error;
+  }
+}`);
   });
 
   it('returns error when execution context node is missing', async () => {
@@ -234,10 +243,6 @@ describe('ExecuteJavaScriptTool', () => {
     let clock: sinon.SinonFakeTimers;
     beforeEach(() => {
       clock = sinon.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
-    });
-
-    afterEach(() => {
-      clock.restore();
     });
 
     it('clears the timeout after execution completes', async () => {
@@ -512,6 +517,99 @@ describe('ExecuteJavaScriptTool', () => {
 
     assertIsError(response);
     assert.match(response.error, /The code is 45 lines \(max 40\)/);
+  });
+
+  describe('blocked network requests', () => {
+    const HINT_PHRASE = 'Network access (e.g., fetch, XMLHttpRequest) is blocked for JavaScript run by this tool';
+    const SKILL_PHRASE = 'load the `network` skill with `learnSkills`';
+
+    const defaultArgs = {
+      explanation: 'Fetch reviews',
+      title: 'Fetching reviews',
+      code: 'const data = await fetch("/api/reviews");',
+    };
+
+    function createContext(observation: string) {
+      return {
+        getExecutionContextNode: () => element,
+        execJs: sinon.stub().resolves(observation),
+        changeManager: new AiAssistance.ChangeManager.ChangeManager(),
+        createExtensionScope: sinon.stub().returns({
+          install: sinon.stub().resolves(),
+          uninstall: sinon.stub().resolves(),
+        }),
+        getOriginLock: (): AiAssistance.Tool.OriginLockState => ({
+          status: 'ESTABLISHED_ORIGIN',
+          origin: SDK.SecurityOrigin.SecurityOrigin.create('https://example.com'),
+        }),
+      };
+    }
+
+    describe('with the V2 architecture', () => {
+      beforeEach(() => {
+        updateHostConfig({devToolsAiV2Architecture: {enabled: true}});
+      });
+
+      it('explains that network access is blocked and points to the network tools when fetch fails', async () => {
+        const tool = new AiAssistance.ExecuteJavaScript.ExecuteJavaScriptTool();
+        const response = await tool.handler(defaultArgs, createContext('Error: Failed to fetch'));
+
+        assertIsResult(response);
+        assert.include(response.result, 'Error: Failed to fetch\n');
+        assert.include(response.result, HINT_PHRASE);
+        assert.include(response.result, SKILL_PHRASE);
+        assert.include(response.result, 'listNetworkRequests');
+      });
+
+      it('explains that network access is blocked when a synchronous XMLHttpRequest fails', async () => {
+        const tool = new AiAssistance.ExecuteJavaScript.ExecuteJavaScriptTool();
+        const xhrError =
+            'Error: Failed to execute \'send\' on \'XMLHttpRequest\': Failed to load \'https://example.com/api/reviews\'.';
+        const response = await tool.handler(defaultArgs, createContext(xhrError));
+
+        assertIsResult(response);
+        assert.include(response.result, `${xhrError}\n`);
+        assert.include(response.result, HINT_PHRASE);
+      });
+
+      it('does not add the hint when a dynamic import fails', async () => {
+        const tool = new AiAssistance.ExecuteJavaScript.ExecuteJavaScriptTool();
+        const importError = 'Error: Failed to fetch dynamically imported module: https://example.com/module.js';
+        const response = await tool.handler(defaultArgs, createContext(importError));
+
+        assertIsResult(response);
+        assert.strictEqual(response.result, importError);
+      });
+
+      it('does not add the hint when an XMLHttpRequest fails for a reason unrelated to the network', async () => {
+        const tool = new AiAssistance.ExecuteJavaScript.ExecuteJavaScriptTool();
+        const stateError =
+            'Error: Failed to execute \'send\' on \'XMLHttpRequest\': The object\'s state must be OPENED.';
+        const response = await tool.handler(defaultArgs, createContext(stateError));
+
+        assertIsResult(response);
+        assert.strictEqual(response.result, stateError);
+      });
+
+      it('does not add the hint to returned data that contains a network error message', async () => {
+        const tool = new AiAssistance.ExecuteJavaScript.ExecuteJavaScriptTool();
+        const response = await tool.handler(defaultArgs, createContext('\'Failed to fetch reviews\''));
+
+        assertIsResult(response);
+        assert.strictEqual(response.result, '\'Failed to fetch reviews\'');
+      });
+    });
+
+    it('explains that network access is blocked without pointing to the network tools in V1', async () => {
+      const tool = new AiAssistance.ExecuteJavaScript.ExecuteJavaScriptTool();
+      const response = await tool.handler(defaultArgs, createContext('Error: Failed to fetch'));
+
+      assertIsResult(response);
+      assert.include(response.result, 'Error: Failed to fetch\n');
+      assert.include(response.result, HINT_PHRASE);
+      assert.notInclude(response.result, 'listNetworkRequests');
+      assert.notInclude(response.result, 'learnSkills');
+    });
   });
 
   describe('origin locking', () => {

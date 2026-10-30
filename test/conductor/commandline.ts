@@ -84,6 +84,11 @@ export interface CommandLineOptions {
   'expectations-file'?: string;
   'force-screenshots': boolean;
   'ota-username'?: string;
+  'ota-password'?: string;
+  'isolated-script-test-output'?: string;
+  'isolated-script-test-perf-output'?: string;
+  'isolated-script-test-filter'?: string|string[];
+  'isolated-script-test-filter-file'?: string|string[];
 }
 
 export function commandLineArgs<T = Record<string, unknown>>(yargs: Yargs.Argv<T>): Yargs.Argv<T&CommandLineOptions> {
@@ -132,9 +137,10 @@ export function commandLineArgs<T = Record<string, unknown>>(yargs: Yargs.Argv<T
         default: false,
       })
       .option('repeat', {
+        alias: ['isolated-script-test-repeat'],
         type: 'number',
         default: 1,
-        desc: 'Reruns the test X number of times regardless of result (e2e tests only)',
+        desc: 'Reruns the test X number of times regardless of result',
       })
       .option('bail', {
         alias: ['fail-fast'],
@@ -143,6 +149,7 @@ export function commandLineArgs<T = Record<string, unknown>>(yargs: Yargs.Argv<T
         desc: 'Stops the test run after the first test failure',
       })
       .option('retries', {
+        alias: ['isolated-script-test-launcher-retry-limit'],
         type: 'number',
         desc: 'Reruns the tests if upon failure at max X number of times',
         default: 0,
@@ -171,13 +178,13 @@ export function commandLineArgs<T = Record<string, unknown>>(yargs: Yargs.Argv<T
         type: 'number',
         desc: 'Total number of shards to split the tests into.',
         implies: 'shard-number',
-        default: 1,
+        default: Number(process.env['GTEST_TOTAL_SHARDS'] ?? 1),
       })
       .option('shard-number', {
         type: 'number',
         desc: 'The shard number to run (1-based).',
         implies: 'shard-count',
-        default: 1,
+        default: Number(process.env['GTEST_SHARD_INDEX'] ?? 0) + 1,
       })
       .option('shard-bias', {
         type: 'number',
@@ -200,5 +207,25 @@ export function commandLineArgs<T = Record<string, unknown>>(yargs: Yargs.Argv<T
       .option('ota-username', {
         type: 'string',
         desc: 'Test account username used for Ai authentication logic in testing.',
+      })
+      .option('ota-password', {
+        type: 'string',
+        desc: 'Test account password used for Ai authentication logic in testing.',
+      })
+      .option('isolated-script-test-output', {
+        type: 'string',
+        desc: 'Path to write JSON Test Results Format v3 output to (used by Chromium Swarming).',
+      })
+      .option('isolated-script-test-perf-output', {
+        type: 'string',
+        desc: 'Path to write perf output to (passed by Chromium Swarming, unused by functional tests).',
+      })
+      .option('isolated-script-test-filter', {
+        type: 'string',
+        desc: '::-separated list of test filters (used by Chromium Swarming).',
+      })
+      .option('isolated-script-test-filter-file', {
+        type: 'string',
+        desc: 'Path to a file containing test filters (used by Chromium Swarming).',
       });
 }

@@ -21,7 +21,6 @@ describe('fetchAndRegisterLocaleData', () => {
   });
 
   afterEach(() => {
-    fetchStub.restore();
     i18n.i18n.resetLocaleDataForTest();
   });
 
@@ -46,7 +45,7 @@ describe('fetchAndRegisterLocaleData', () => {
 
     assert.isTrue(
         fetchStub.calledWith(
-            'devtools://devtools/remote/serve_file/@ffe848af6a5df4fa127e2929331116b7f9f1cb30/core/i18n/locales/de.json'),
+            'devtools://devtools-remote/remote/serve_file/@ffe848af6a5df4fa127e2929331116b7f9f1cb30/core/i18n/locales/de.json'),
         `Actually called with ${fetchStub.args[0][0]}`);
   });
 });

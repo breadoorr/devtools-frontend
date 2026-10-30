@@ -5,12 +5,14 @@
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
+import type * as SDK from '../../core/sdk/sdk.js';
 import * as Bindings from '../../models/bindings/bindings.js';
 import type {Icon} from '../../ui/kit/kit.js';
 import * as ColorPicker from '../../ui/legacy/components/color_picker/color_picker.js';
 import * as InlineEditor from '../../ui/legacy/components/inline_editor/inline_editor.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
+import {type RenderingContext, ValueEditEvent} from './PropertyRenderer.js';
 import type {StylePropertyTreeElement} from './StylePropertyTreeElement.js';
 
 const UIStrings = {
@@ -19,11 +21,6 @@ const UIStrings = {
    * allows the user to edit cubic-bezier CSS properties directly.
    */
   openCubicBezierEditor: 'Open cubic bezier editor',
-  /**
-   * @description Tooltip text for an icon that opens the shadow editor. The shadow editor is a tool
-   * which allows the user to edit CSS shadow properties.
-   */
-  openShadowEditor: 'Open shadow editor',
 } as const;
 const str_ = i18n.i18n.registerUIStrings('panels/elements/ColorSwatchPopoverIcon.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
@@ -32,14 +29,16 @@ interface BezierPopoverIconParams {
   treeElement: StylePropertyTreeElement;
   swatchPopoverHelper: InlineEditor.SwatchPopoverHelper.SwatchPopoverHelper;
   swatch: Icon;
-  bezierText: HTMLElement;
+  match: SDK.CSSPropertyParser.Match;
+  context: RenderingContext;
 }
 
 export class BezierPopoverIcon {
   private treeElement: StylePropertyTreeElement;
   private readonly swatchPopoverHelper: InlineEditor.SwatchPopoverHelper.SwatchPopoverHelper;
   private readonly swatch: Icon;
-  private readonly bezierText: HTMLElement;
+  private readonly match: SDK.CSSPropertyParser.Match;
+  private readonly context: RenderingContext;
   private readonly boundBezierChanged: (event: Common.EventTarget.EventTargetEvent<string>) => void;
   private readonly boundOnScroll: (event: Event) => void;
   private bezierEditor?: InlineEditor.BezierEditor.BezierEditor;
@@ -50,12 +49,14 @@ export class BezierPopoverIcon {
     treeElement,
     swatchPopoverHelper,
     swatch,
-    bezierText,
+    match,
+    context,
   }: BezierPopoverIconParams) {
     this.treeElement = treeElement;
     this.swatchPopoverHelper = swatchPopoverHelper;
     this.swatch = swatch;
-    this.bezierText = bezierText;
+    this.match = match;
+    this.context = context;
 
     UI.Tooltip.Tooltip.install(this.swatch, i18nString(UIStrings.openCubicBezierEditor));
     this.swatch.addEventListener('click', this.iconClick.bind(this), false);
@@ -76,7 +77,8 @@ export class BezierPopoverIcon {
       return;
     }
 
-    const model = InlineEditor.AnimationTimingModel.AnimationTimingModel.parse(this.bezierText.innerText) ||
+    const text = this.context.edits?.getEdit(this.match) ?? this.context.matchedResult.getComputedText(this.match.node);
+    const model = InlineEditor.AnimationTimingModel.AnimationTimingModel.parse(text) ||
         InlineEditor.AnimationTimingModel.LINEAR_BEZIER;
     this.bezierEditor = new InlineEditor.BezierEditor.BezierEditor(model);
     this.bezierEditor.addEventListener(InlineEditor.BezierEditor.Events.BEZIER_CHANGED, this.boundBezierChanged);
@@ -96,7 +98,8 @@ export class BezierPopoverIcon {
   }
 
   private bezierChanged(event: Common.EventTarget.EventTargetEvent<string>): void {
-    this.bezierText.textContent = event.data;
+    this.swatch.dispatchEvent(new ValueEditEvent(event.data));
+    this.context.recordEdit(this.match, event.data);
     void this.treeElement.applyStyleText(this.treeElement.renderedPropertyText(), false);
   }
 
@@ -313,56 +316,35 @@ export interface ShadowEventTypes {
 export class ShadowSwatchPopoverHelper extends Common.ObjectWrapper.ObjectWrapper<ShadowEventTypes> {
   private treeElement: StylePropertyTreeElement;
   private readonly swatchPopoverHelper: InlineEditor.SwatchPopoverHelper.SwatchPopoverHelper;
-  private readonly shadowSwatch: InlineEditor.Swatches.CSSShadowSwatch;
-  private iconElement: HTMLSpanElement;
   private readonly boundShadowChanged:
       (event: Common.EventTarget.EventTargetEvent<InlineEditor.CSSShadowEditor.CSSShadowModel>) => void;
   private readonly boundOnScroll: (event: Event) => void;
   private cssShadowEditor?: InlineEditor.CSSShadowEditor.CSSShadowEditor;
   private scrollerElement?: Element;
   private originalPropertyText?: string|null;
-  constructor(
-      treeElement: StylePropertyTreeElement, swatchPopoverHelper: InlineEditor.SwatchPopoverHelper.SwatchPopoverHelper,
-      shadowSwatch: InlineEditor.Swatches.CSSShadowSwatch) {
+  constructor(treeElement: StylePropertyTreeElement,
+              swatchPopoverHelper: InlineEditor.SwatchPopoverHelper.SwatchPopoverHelper) {
     super();
     this.treeElement = treeElement;
     this.swatchPopoverHelper = swatchPopoverHelper;
-    this.shadowSwatch = shadowSwatch;
-    this.iconElement = shadowSwatch.iconElement();
-
-    UI.Tooltip.Tooltip.install(this.iconElement, i18nString(UIStrings.openShadowEditor));
-    this.iconElement.addEventListener('click', this.iconClick.bind(this), false);
-    this.iconElement.addEventListener('keydown', this.keyDown.bind(this), false);
-    this.iconElement.addEventListener('mousedown', event => event.consume(), false);
 
     this.boundShadowChanged = this.shadowChanged.bind(this);
     this.boundOnScroll = this.onScroll.bind(this);
   }
 
-  private keyDown(event: KeyboardEvent): void {
-    if (Platform.KeyboardUtilities.isEnterOrSpaceKey(event)) {
-      event.consume(true);
-      this.showPopover();
-    }
-  }
-
-  private iconClick(event: Event): void {
-    event.consume(true);
-    this.showPopover();
-  }
-
-  showPopover(): void {
+  showPopover(shadowSwatch: InlineEditor.Swatches.CSSShadowSwatch): void {
     if (this.swatchPopoverHelper.isShowing()) {
       this.swatchPopoverHelper.hide(true);
       return;
     }
 
+    const iconElement = shadowSwatch.iconElement();
     this.cssShadowEditor = new InlineEditor.CSSShadowEditor.CSSShadowEditor();
     this.cssShadowEditor.element.classList.toggle('with-padding', true);
-    this.cssShadowEditor.setModel(this.shadowSwatch.model());
+    this.cssShadowEditor.setModel(shadowSwatch.model());
     this.cssShadowEditor.addEventListener(InlineEditor.CSSShadowEditor.Events.SHADOW_CHANGED, this.boundShadowChanged);
-    this.swatchPopoverHelper.show(this.cssShadowEditor, this.iconElement, this.onPopoverHidden.bind(this));
-    this.scrollerElement = this.iconElement.enclosingNodeOrSelfWithClass('style-panes-wrapper');
+    this.swatchPopoverHelper.show(this.cssShadowEditor, iconElement, this.onPopoverHidden.bind(this));
+    this.scrollerElement = iconElement.enclosingNodeOrSelfWithClass('style-panes-wrapper');
     if (this.scrollerElement) {
       this.scrollerElement.addEventListener('scroll', this.boundOnScroll, false);
     }

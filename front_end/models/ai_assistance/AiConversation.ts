@@ -8,10 +8,12 @@ import * as Root from '../../core/root/root.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as LHModel from '../../models/lighthouse/lighthouse.js';
 import type * as Trace from '../../models/trace/trace.js';
+import * as AiUtils from '../ai-utils/ai-utils.js';
 import type * as NetworkTimeCalculator from '../network_time_calculator/network_time_calculator.js';
 
 import {AccessibilityAgent} from './agents/AccessibilityAgent.js';
 import {
+  type ActionResponse,
   type AgentOptions,
   type AiAgent,
   type AllowedOriginResult,
@@ -21,6 +23,7 @@ import {
   type MultimodalInput,
   type ResponseData,
   ResponseType,
+  type SerializedResponseData,
   type UserQuery,
 } from './agents/AiAgent.js';
 import {ContextSelectionAgent} from './agents/ContextSelectionAgent.js';
@@ -30,8 +33,7 @@ import {PerformanceAgent} from './agents/PerformanceAgent.js';
 import {StorageAgent} from './agents/StorageAgent.js';
 import {StylingAgent} from './agents/StylingAgent.js';
 import {AiAgent2} from './AiAgent2.js';
-import {AiHistoryStorage, ConversationType, type SerializedConversation} from './AiHistoryStorage.js';
-import {isContextSelectionEnabled} from './AiUtils.js';
+import type {AlwaysAllowedTools} from './AlwaysAllowedTools.js';
 import type {ChangeManager} from './ChangeManager.js';
 import {DOMNodeContext} from './contexts/DOMNodeContext.js';
 import {FileContext} from './contexts/FileContext.js';
@@ -41,6 +43,10 @@ import {RequestContext} from './contexts/RequestContext.js';
 import {StorageContext} from './contexts/StorageContext.js';
 import {type OriginLockState, ToolAnnotation} from './tools/Tool.js';
 import {ToolRegistry} from './tools/ToolRegistry.js';
+
+type AiHistoryStorage = AiUtils.AiHistoryStorage.AiHistoryStorage;
+type ConversationType = AiUtils.AiHistoryStorage.ConversationType;
+type SerializedConversation = AiUtils.AiHistoryStorage.SerializedConversation;
 
 export const NOT_FOUND_IMAGE_DATA = '';
 export const CONTEXT_TITLE = 'Analyzing data';
@@ -76,14 +82,20 @@ export interface AiConversationOptions {
   networkTimeCalculator?: NetworkTimeCalculator.NetworkTransferTimeCalculator;
   lighthouseRecording?: (overrides?: LHModel.RunTypes.RunOverrides) => Promise<LHModel.RunTypes.RunResult>;
   aiHistoryStorage?: AiHistoryStorage;
+  alwaysAllowedTools?: AlwaysAllowedTools;
   targetManager?: SDK.TargetManager.TargetManager;
 }
 
 export class AiConversation {
   static fromSerializedConversation(serializedConversation: SerializedConversation): AiConversation {
-    const history = serializedConversation.history.map(entry => {
+    const history = (serializedConversation.history as SerializedResponseData[]).map(entry => {
       if (entry.type === ResponseType.SIDE_EFFECT) {
         return {...entry, confirm: () => {}};
+      }
+      if (entry.type === ResponseType.ACTION && 'code' in entry) {
+        // Entries saved before `ActionResponse.code` was renamed to `action`.
+        const {code, ...rest} = entry as ActionResponse & {code?: string};
+        return {...rest, action: rest.action ?? code};
       }
       return entry;
     });
@@ -117,6 +129,7 @@ export class AiConversation {
   #networkTimeCalculator?: NetworkTimeCalculator.NetworkTransferTimeCalculator;
   readonly #aiHistoryStorage: AiHistoryStorage;
   readonly #targetManager: SDK.TargetManager.TargetManager;
+  readonly #alwaysAllowedTools?: AlwaysAllowedTools;
 
   constructor(options: AiConversationOptions) {
     const {
@@ -130,9 +143,10 @@ export class AiConversation {
       onInspectElement,
       networkTimeCalculator,
       lighthouseRecording,
-      aiHistoryStorage = AiHistoryStorage.instance(),
+      aiHistoryStorage = AiUtils.AiHistoryStorage.AiHistoryStorage.instance(),
       // eslint-disable-next-line @devtools/no-instance-of-migrated-singletons
       targetManager = SDK.TargetManager.TargetManager.instance(),
+      alwaysAllowedTools,
     } = options;
     this.#changeManager = changeManager;
     this.#aidaClient = aidaClient;
@@ -142,6 +156,7 @@ export class AiConversation {
     this.#lighthouseRecording = lighthouseRecording;
     this.#aiHistoryStorage = aiHistoryStorage;
     this.#targetManager = targetManager;
+    this.#alwaysAllowedTools = alwaysAllowedTools;
 
     this.id = id;
     this.#isReadOnly = isReadOnly;
@@ -155,7 +170,8 @@ export class AiConversation {
   }
 
   static titleForSerialized(serialized: SerializedConversation): string|undefined {
-    const query = serialized.history.find(item => item.type === ResponseType.USER_QUERY)?.query;
+    const query =
+        (serialized.history as SerializedResponseData[]).find(item => item.type === ResponseType.USER_QUERY)?.query;
     if (!query) {
       return undefined;
     }
@@ -189,8 +205,8 @@ export class AiConversation {
   setContext(updateContext: ConversationContext<unknown>|null): void {
     if (!updateContext) {
       this.#contexts = [];
-      if (isContextSelectionEnabled()) {
-        this.#updateAgent(ConversationType.NONE);
+      if (AiUtils.AiUtils.isContextSelectionEnabled()) {
+        this.#updateAgent(AiUtils.AiHistoryStorage.ConversationType.NONE);
       }
 
       return;
@@ -198,19 +214,19 @@ export class AiConversation {
 
     this.#contexts = [updateContext];
 
-    if (isContextSelectionEnabled()) {
+    if (AiUtils.AiUtils.isContextSelectionEnabled()) {
       if (updateContext instanceof FileContext) {
-        this.#updateAgent(ConversationType.FILE);
+        this.#updateAgent(AiUtils.AiHistoryStorage.ConversationType.FILE);
       } else if (updateContext instanceof DOMNodeContext) {
-        this.#updateAgent(ConversationType.STYLING);
+        this.#updateAgent(AiUtils.AiHistoryStorage.ConversationType.STYLING);
       } else if (updateContext instanceof RequestContext) {
-        this.#updateAgent(ConversationType.NETWORK);
+        this.#updateAgent(AiUtils.AiHistoryStorage.ConversationType.NETWORK);
       } else if (updateContext instanceof PerformanceTraceContext) {
-        this.#updateAgent(ConversationType.PERFORMANCE);
+        this.#updateAgent(AiUtils.AiHistoryStorage.ConversationType.PERFORMANCE);
       } else if (updateContext instanceof LighthouseContext) {
-        this.#updateAgent(ConversationType.ACCESSIBILITY);
+        this.#updateAgent(AiUtils.AiHistoryStorage.ConversationType.ACCESSIBILITY);
       } else if (updateContext instanceof StorageContext) {
-        this.#updateAgent(ConversationType.STORAGE);
+        this.#updateAgent(AiUtils.AiHistoryStorage.ConversationType.STORAGE);
       }
     }
   }
@@ -275,8 +291,8 @@ export class AiConversation {
           if (!item.output) {
             break;
           }
-          if (item.code) {
-            contentParts.push(`**Code executed:**\n\`\`\`\n${item.code.trim()}\n\`\`\``);
+          if (item.action) {
+            contentParts.push(`**Code executed:**\n\`\`\`\n${item.action.trim()}\n\`\`\``);
           }
           contentParts.push(`**Data returned:**\n\`\`\`\n${item.output}\n\`\`\``);
           break;
@@ -380,7 +396,8 @@ export class AiConversation {
     // In legacy V1 architecture, agents are recreated when switching conversation types.
     // Discard conversation history when transitioning away from Storage to prevent
     // sensitive data (e.g. cookies or storage items) from leaking into subsequent agent queries.
-    const isTransitioningFromStorage = previousType === ConversationType.STORAGE && type !== ConversationType.STORAGE;
+    const isTransitioningFromStorage = previousType === AiUtils.AiHistoryStorage.ConversationType.STORAGE &&
+        type !== AiUtils.AiHistoryStorage.ConversationType.STORAGE;
     const history = isTransitioningFromStorage ? [] : this.#filterHistoryForNewAgent();
 
     const baseOptions = {
@@ -394,6 +411,7 @@ export class AiConversation {
       lighthouseRecording: this.#lighthouseRecording,
       history,
       targetManager: this.#targetManager,
+      alwaysAllowedTools: this.#alwaysAllowedTools,
     };
 
     this.#agent = Root.Runtime.hostConfig.devToolsAiV2Architecture?.enabled ? new AiAgent2({
@@ -408,19 +426,19 @@ export class AiConversation {
 
   #createV1Agent(type: ConversationType, options: AgentOptions): AiAgent<unknown> {
     switch (type) {
-      case ConversationType.STYLING:
+      case AiUtils.AiHistoryStorage.ConversationType.STYLING:
         return new StylingAgent(options);
-      case ConversationType.NETWORK:
+      case AiUtils.AiHistoryStorage.ConversationType.NETWORK:
         return new NetworkAgent(options);
-      case ConversationType.FILE:
+      case AiUtils.AiHistoryStorage.ConversationType.FILE:
         return new FileAgent(options);
-      case ConversationType.PERFORMANCE:
+      case AiUtils.AiHistoryStorage.ConversationType.PERFORMANCE:
         return new PerformanceAgent(options);
-      case ConversationType.ACCESSIBILITY:
+      case AiUtils.AiHistoryStorage.ConversationType.ACCESSIBILITY:
         return new AccessibilityAgent(options);
-      case ConversationType.STORAGE:
+      case AiUtils.AiHistoryStorage.ConversationType.STORAGE:
         return new StorageAgent(options);
-      case ConversationType.NONE:
+      case AiUtils.AiHistoryStorage.ConversationType.NONE:
         return new ContextSelectionAgent(options);
       default:
         Platform.assertNever(type, 'Unknown conversation type');
