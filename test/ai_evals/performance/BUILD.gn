@@ -11,6 +11,23 @@ node_ts_library("performance") {
     "cls-layout-animations.test.ts",
     "cls-unsized-image.test.ts",
     "cls-webfont-loading.test.ts",
+    "lcp-good-cwv-check.test.ts",
+    "lcp-high-ttfb.test.ts",
+    "lcp-load-delay-low-priority.test.ts",
+    "lcp-load-delay-request-chain.test.ts",
+    "lcp-load-duration-large-font.test.ts",
+    "lcp-load-duration-large-image.test.ts",
+    "lcp-render-delay-forced-reflow.test.ts",
+    "lcp-render-delay-layout-paint.test.ts",
+    "lcp-render-delay-long-scripting.test.ts",
+    "lcp-render-delay-thousand-cuts.test.ts",
+    "perf-problems-backend-latency.test.ts",
+    "perf-problems-bad-cls.test.ts",
+    "perf-problems-bad-inp.test.ts",
+    "perf-problems-bad-lcp.test.ts",
+    "perf-problems-low-lighthouse-score.test.ts",
+    "perf-problems-memory-leak.test.ts",
+    "perf-problems-smoothness-fps.test.ts",
   ]
 
   ts_deps = [

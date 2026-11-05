@@ -27,6 +27,7 @@ function createAidaDoConversationRequest(overrides: Partial<AidaClient.DoConvers
   return {
     current_message: {parts: [{text: 'Hello'}], role: AidaClient.Role.USER},
     client: DEFAULT_CLIENT,
+    client_feature: AidaClient.ClientFeature.CHROME_CONSOLE_INSIGHTS,
     metadata: {...DEFAULT_METADATA, ...metadata},
     ...otherOverrides,
   };
@@ -35,10 +36,12 @@ function createAidaDoConversationRequest(overrides: Partial<AidaClient.DoConvers
 function createGcaRequest(
     experience: string, overrides: Partial<GcaTypes.GenerateContentRequest> = {}): GcaTypes.GenerateContentRequest {
   const {labels, aicode, ...otherOverrides} = overrides;
+  const defaultFeatureLabel: Record<string, string> =
+      experience === 'chat_console_insights' ? {client_feature: 'chrome_console_insights'} : {};
   return {
     contents: [{role: 'user', parts: [{text: 'Hello'}]}],
     ...otherOverrides,
-    labels: {...DEFAULT_LABELS, ...labels},
+    labels: {...DEFAULT_LABELS, ...defaultFeatureLabel, ...labels},
     aicode: aicode || {
       experience,
     },
@@ -208,6 +211,112 @@ describe('AidaGcaTranslation', () => {
       });
 
       assert.deepEqual(AidaGcaTranslation.aidaDoConversationRequestToGcaRequest(aidaRequest), expectedGcaRequest);
+    });
+
+    it('translates a function declaration with array of object parameters', () => {
+      const aidaRequest = createAidaDoConversationRequest({
+        function_declarations: [{
+          name: 'set_styles',
+          description: 'A description',
+          parameters: {
+            type: AidaClient.ParametersTypes.OBJECT,
+            description: 'Params',
+            properties: {
+              styles: {
+                type: AidaClient.ParametersTypes.ARRAY,
+                description: 'Style list',
+                items: {
+                  type: AidaClient.ParametersTypes.OBJECT,
+                  description: 'Style item',
+                  properties: {
+                    name: {type: AidaClient.ParametersTypes.STRING, description: 'Property name'},
+                    value: {type: AidaClient.ParametersTypes.STRING, description: 'Property value'},
+                  },
+                  required: ['name', 'value'],
+                },
+              },
+            },
+            required: ['styles'],
+          },
+        }],
+      });
+
+      const expectedGcaRequest = createGcaRequest('chat_console_insights', {
+        tools: [{
+          functionDeclarations: [{
+            name: 'set_styles',
+            description: 'A description',
+            parameters: {
+              type: GcaTypes.Type.OBJECT,
+              description: 'Params',
+              properties: {
+                styles: {
+                  type: GcaTypes.Type.ARRAY,
+                  description: 'Style list',
+                  items: {
+                    type: GcaTypes.Type.OBJECT,
+                    description: 'Style item',
+                    properties: {
+                      name: {type: GcaTypes.Type.STRING, description: 'Property name'},
+                      value: {type: GcaTypes.Type.STRING, description: 'Property value'},
+                    },
+                    required: ['name', 'value'],
+                  },
+                },
+              },
+              required: ['styles'],
+            },
+          }],
+        }],
+      });
+
+      assert.deepEqual(AidaGcaTranslation.aidaDoConversationRequestToGcaRequest(aidaRequest), expectedGcaRequest);
+    });
+
+    it('maps client_feature to the corresponding GCA experience', () => {
+      function translateFeature(clientFeature: AidaClient.ClientFeature): string {
+        return AidaGcaTranslation
+            .aidaDoConversationRequestToGcaRequest(createAidaDoConversationRequest({client_feature: clientFeature}))
+            .aicode.experience;
+      }
+
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_CONSOLE_INSIGHTS), 'chat_console_insights');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_STYLING_AGENT), 'chat_freestyler');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_NETWORK_AGENT), 'chat_drjones_network_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_FILE_AGENT), 'chat_drjones_file_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_PATCH_AGENT), 'chat_patch_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_PERFORMANCE_ANNOTATIONS_AGENT),
+                         'chat_performance_annotations_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_PERFORMANCE_FULL_AGENT),
+                         'chat_performance_full_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_CONTEXT_SELECTION_AGENT),
+                         'chat_context_selection_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_ACCESSIBILITY_AGENT),
+                         'chat_accessibility_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_CONVERSATION_SUMMARY_AGENT),
+                         'chat_conversation_summary_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_STORAGE_AGENT), 'chat_storage_agent');
+      assert.strictEqual(translateFeature(AidaClient.ClientFeature.CHROME_DEVTOOLS_V2_AGENT), 'chat_devtools_v2_agent');
+    });
+
+    it('throws an error when client_feature is CLIENT_FEATURE_UNSPECIFIED or unmapped', () => {
+      const unspecifiedRequest = createAidaDoConversationRequest({
+        client_feature: AidaClient.ClientFeature.CLIENT_FEATURE_UNSPECIFIED,
+      });
+      assert.throws(() => AidaGcaTranslation.aidaDoConversationRequestToGcaRequest(unspecifiedRequest),
+                    'Unsupported client feature for GCA conversation: 0');
+
+      const omittedFeatureRequest = createAidaDoConversationRequest({
+        client_feature: undefined,
+      });
+      assert.throws(() => AidaGcaTranslation.aidaDoConversationRequestToGcaRequest(omittedFeatureRequest),
+                    'Unsupported client feature for GCA conversation: undefined');
+
+      const unknownFeatureRequest = createAidaDoConversationRequest({
+        client_feature: 999 as AidaClient.ClientFeature,
+      });
+      assert.throws(() => AidaGcaTranslation.aidaDoConversationRequestToGcaRequest(unknownFeatureRequest),
+                    'Unsupported client feature for GCA conversation: 999');
     });
   });
 
@@ -617,6 +726,16 @@ describe('AidaGcaTranslation', () => {
                            },
                            inferenceOptionMetadata: {modelId: 'gen-model'},
                          },
+                       }]);
+    });
+
+    it('translates a chunk response with an error without throwing', () => {
+      const gcaResponse = createGcaResponse({
+        error: {code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED'},
+      });
+
+      assert.deepEqual(AidaGcaTranslation.gcaChunkResponseToAidaChunkResponse(gcaResponse), [{
+                         error: {code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED'},
                        }]);
     });
   });

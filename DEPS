@@ -12,27 +12,25 @@ vars = {
   'build_with_chromium': False,
 
   'build_url': 'https://chromium.googlesource.com/chromium/src/build.git',
-  'build_revision': 'c9df9e10e2c0bb703dd0777d63824082f82320a6',
+  'build_revision': '91db6a28b4f05dbd925eba020d4e76896e48d4a8',
 
   'buildtools_url': 'https://chromium.googlesource.com/chromium/src/buildtools.git',
-  'buildtools_revision': 'd0d4c192e3c718016b3a0c5d44ccec632bccfe96',
+  'buildtools_revision': '157b52d9eb680bceb0ce00925e9c54df531049b7',
 
   'depot_tools_url': 'https://chromium.googlesource.com/chromium/tools/depot_tools.git',
-  'depot_tools_revision': '37e67d87efb841c1633c9943cdc334ecb523b921',
+  'depot_tools_revision': '51800fe2853990f7daefc93aef0cb68beaf394d5',
 
   'inspector_protocol_url': 'https://chromium.googlesource.com/deps/inspector_protocol',
   'inspector_protocol_revision': 'e7943497823b2371b2b012986f36d5c9b94b8fc5',
 
   # Keeping track of the last time we rolled the browser protocol files.
-  'chromium_browser_protocol_revision' : '962a1a8269779b64aa7d5fd46598ef410265b422',
+  'chromium_browser_protocol_revision' : 'b00d6cf8da7aceb173db8721210cd810c03d2ce4',
 
   'clang_format_url': 'https://chromium.googlesource.com/external/github.com/llvm/llvm-project/clang/tools/clang-format.git',
   'clang_format_revision': '9f796802e5d633c96dbe97e0b6683d5e62594f9f',
 
-  'emscripten_tag': 'ade9d780ff17c88d81aa13860361743e3c1e1396',
-
   # GN CIPD package version.
-  'gn_version': 'git_revision:224f6aa73aeb73aafb05df998073ff2c7cae666f',
+  'gn_version': 'git_revision:ed7fee04cb30b96ed40ef188acfad5417349e399',
 
   'cmake_version': 'version:2@3.21.3',
 
@@ -52,7 +50,7 @@ vars = {
   # Note: This var is no longer referenced in the body of this DEPS file.
   # However it is used by the roll script (scripts/deps/roll_deps.py) to ease
   # version resolution. DO NOT REMOVE!
-  'chrome': '159.0.8132.0',
+  'chrome': '159.0.8141.0',
 
   # 'magic' text to tell depot_tools that git submodules should be accepted but
   # but parity with DEPS file is expected.
@@ -65,7 +63,7 @@ vars = {
   'cpython3_version': 'version:3@3.11.9.chromium.38',
 
   # siso CIPD package version
-  'siso_version': 'git_revision:dfc32e4edca158cff2b64a1658ee3940f0116b3a',
+  'siso_version': 'git_revision:c508213533aa5cd425b69cb0f66e53522d77022d',
 
   # Fetches the AI Evals testing data.
   'checkout_devtools_ai_evals': False,
@@ -79,6 +77,7 @@ allowed_hosts = [
 
   # TODO(b/337061377): Move into a separate allowed gcs bucket list.
   'chromium-nodejs',
+  'webassembly',
 ]
 
 deps = {
@@ -160,6 +159,52 @@ deps = {
     'condition': 'non_git_source',
   },
 
+  # Pre-built emscripten-releases toolchain. Provides wasm-as and llvm-readobj
+  # for building the wasm test modules, and emscripten for the C/C++ debugging
+  # extension. Only `non_git_source`: devtools-frontend is in Chromium's
+  # recursedeps, so this one entry serves standalone and Chromium checkouts
+  # alike. To roll, update the emscripten-releases revision in all object
+  # names, together with their sha256sum, size_bytes and generation.
+  # The extension also needs the `setup_emscripten` hook below.
+  'third_party/emscripten-releases': {
+    'dep_type': 'gcs',
+    'bucket': 'webassembly',
+    'condition': 'non_git_source',
+    'objects': [
+      {
+        'object_name': 'emscripten-releases-builds/linux/ade9d780ff17c88d81aa13860361743e3c1e1396/wasm-binaries.tbz2',
+        'sha256sum': 'e2c43068fb1985592db42183a13f85bbd9518b3747746e0003d70c7d770a0b2f',
+        'size_bytes': 348308473,
+        'generation': 1655696981812700,
+        'output_file': 'wasm-binaries.tbz2',
+        'condition': 'host_os == "linux" and host_cpu == "x64"',
+      },
+      {
+        'object_name': 'emscripten-releases-builds/mac/ade9d780ff17c88d81aa13860361743e3c1e1396/wasm-binaries.tbz2',
+        'sha256sum': '567e9548f3fa7c1aa717821af4aaa7849a0f7217cb55eb7f66a06c898808fd96',
+        'size_bytes': 339345467,
+        'generation': 1655699997031998,
+        'output_file': 'wasm-binaries.tbz2',
+        'condition': 'host_os == "mac" and host_cpu != "arm64"',
+      },
+      {
+        'object_name': 'emscripten-releases-builds/mac/ade9d780ff17c88d81aa13860361743e3c1e1396/wasm-binaries-arm64.tbz2',
+        'sha256sum': 'df8319aba8bc0d0c40ebec3c8f45e507c2a51a57df24826d4cab6f6cd75017ac',
+        'size_bytes': 305105474,
+        'generation': 1655703107254645,
+        'output_file': 'wasm-binaries-arm64.tbz2',
+        'condition': 'host_os == "mac" and host_cpu == "arm64"',
+      },
+      {
+        'object_name': 'emscripten-releases-builds/win/ade9d780ff17c88d81aa13860361743e3c1e1396/wasm-binaries.zip',
+        'sha256sum': '6bfec6bf6a01e483a57e91f7223340a425f6ff711cbd32a08ed78002810d7882',
+        'size_bytes': 412761468,
+        'generation': 1655697148069102,
+        'output_file': 'wasm-binaries.zip',
+        'condition': 'host_os == "win"',
+      },
+    ],
+  },
   # Always download Linux x64 package regardless of host OS for RBE workers.
   'third_party/cpython3/linux-amd64': {
       'packages': [
@@ -297,10 +342,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '159.0.8132.0/win64/chrome-win64.zip',
-        'sha256sum': '2a9d8c85eda28f9f948e28b68b0b06c4c27176864dcc06ddb9e87c34d67acff9',
-        'size_bytes': 214414019,
-        'generation': 1793335423425072,
+        'object_name': '159.0.8141.0/win64/chrome-win64.zip',
+        'sha256sum': '929fc5dd4a950717932fcd7abd9e00515c8078922e80dc9bfbd2c622df682357',
+        'size_bytes': 215567266,
+        'generation': 1793729487338644,
       },
     ],
   },
@@ -310,10 +355,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '159.0.8132.0/mac-x64/chrome-mac-x64.zip',
-        'sha256sum': '5a6bcdbde5e865d538e5feef5051925ae328986bb36cc222f10647af36ff5415',
-        'size_bytes': 212454709,
-        'generation': 1793343835978970,
+        'object_name': '159.0.8141.0/mac-x64/chrome-mac-x64.zip',
+        'sha256sum': '085599c2ae79ff9b9d1efea75a04c44e98bfc44420968a87d589bf8dcec88b90',
+        'size_bytes': 214720480,
+        'generation': 1793733990165756,
       },
     ],
   },
@@ -323,10 +368,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '159.0.8132.0/mac-arm64/chrome-mac-arm64.zip',
-        'sha256sum': '2ba2846d1a253738060a19557a798c25378e2c2ba49c102f6ef5984f64e450a2',
-        'size_bytes': 199310549,
-        'generation': 1793335666815730,
+        'object_name': '159.0.8141.0/mac-arm64/chrome-mac-arm64.zip',
+        'sha256sum': '1f45606c80acf14445accc1804adad80778245d18c802d2c761a5a68859bf6f7',
+        'size_bytes': 203125414,
+        'generation': 1793725331212666,
       },
     ],
   },
@@ -336,10 +381,10 @@ deps = {
     'bucket': 'chrome-for-testing-public',
     'objects': [
       {
-        'object_name': '159.0.8132.0/linux64/chrome-linux64.zip',
-        'sha256sum': 'cff42135c0e31a04261fa657d667891a7d96a1ebcf535b42dbcf7211b8c9f83c',
-        'size_bytes': 206833412,
-        'generation': 1793334263850622,
+        'object_name': '159.0.8141.0/linux64/chrome-linux64.zip',
+        'sha256sum': '0c277b01bc8f17e5adc4a87774df7288cd0738b6b7813555151df20a480a9618',
+        'size_bytes': 210155447,
+        'generation': 1793724867955653,
       },
     ],
   },
@@ -434,9 +479,14 @@ hooks = [
                '-o', 'build/util/LASTCHANGE'],
   },
   {
-    'name': 'emscripten',
+    # Adds the emscripten config file and the ld.lld linker name to the
+    # emscripten-releases toolchain from GCS, which the C/C++ debugging
+    # extension build needs. Both live in the GCS dependency directory,
+    # which gclient replaces as a whole on every emscripten roll.
+    'name': 'setup_emscripten',
     'pattern': '.',
-    'action': ['vpython3', 'scripts/deps/download_emscripten.py', Var('emscripten_tag'), 'third_party/emscripten-releases'],
+    'condition': 'checkout_cxx_debugging_extension_deps == True',
+    'action': ['python3', 'scripts/deps/setup_emscripten.py', 'third_party/emscripten-releases'],
   },
   {
     'name': 'VS Code settings',

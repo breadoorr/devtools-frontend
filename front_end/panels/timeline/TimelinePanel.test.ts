@@ -394,6 +394,26 @@ describe('TimelinePanel', function() {
         primaryTarget.dispose('test');
       }
     });
+
+    it('rejects and removes the recording listener when the abort signal fires', async function() {
+      const uiView = UI.ViewManager.ViewManager.instance({forceNew: true});
+      sinon.stub(uiView, 'showView');
+      const abortController = new AbortController();
+      sinon.stub(timeline, 'recordReload').callsFake(() => {
+        abortController.abort();
+      });
+
+      let thrownError: unknown;
+      try {
+        await Timeline.TimelinePanel.TimelinePanel.executeRecordAndReload({signal: abortController.signal});
+      } catch (err) {
+        thrownError = err;
+      }
+
+      assert.instanceOf(thrownError, Error);
+      assert.strictEqual(thrownError.message, 'Recording was aborted');
+      assert.isFalse(timeline.hasEventListeners(Timeline.TimelinePanel.Events.RECORDING_COMPLETED));
+    });
   });
 
   describe('saveToFile', function() {
@@ -875,4 +895,19 @@ describe('TimelinePanel', function() {
        await timeline.loadingComplete(events, null, null);
        assert.isTrue(timeline.getFlameChart().isShowing());
      });
+
+  it('ignores unrelated window messages when launching a rehydrated session', async function() {
+    sinon.stub(window, 'open').returns(window);
+    const postMessageStub = sinon.stub(window, 'postMessage');
+
+    const traceJson = '{"enhancedTraceVersion":1}';
+    await timeline.loadFromFile(new File([traceJson], 'enhanced.json'));
+
+    window.dispatchEvent(new MessageEvent('message', {data: {type: 'UNRELATED_MESSAGE'}, source: window}));
+    sinon.assert.notCalled(postMessageStub);
+
+    window.dispatchEvent(new MessageEvent('message', {data: {type: 'REHYDRATING_WINDOW_READY'}, source: window}));
+    sinon.assert.calledOnce(postMessageStub);
+    assert.deepEqual(postMessageStub.firstCall.args[0], {type: 'REHYDRATING_TRACE_FILE', traceJson});
+  });
 });

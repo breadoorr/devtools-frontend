@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import * as Host from '../../../core/host/host.js';
-import type * as Platform from '../../../core/platform/platform.js';
+import * as Platform from '../../../core/platform/platform.js';
 import * as Root from '../../../core/root/root.js';
 import * as SDK from '../../../core/sdk/sdk.js';
 import type * as TextUtils from '../../../core/text_utils/text_utils.js';
@@ -22,7 +22,7 @@ import {
   type ToolName,
 } from '../tools/Tool.js';
 
-const {debugLog, isStructuredLogEnabled} = AiUtils.Debug;
+const {debugLog, isDebugMode} = AiUtils.Debug;
 
 type UrlString = Platform.DevToolsPath.UrlString;
 const MAX_SUGGESTION_LENGTH = 200;
@@ -239,6 +239,7 @@ export interface SideEffectResponse extends ToolCallEvent {
   confirm: (decision: PermissionDecision) => void;
   permissionPrompt?: PermissionPrompt;
   permissionTitle?: string;
+  toolName?: string;
 }
 
 /**
@@ -261,6 +262,10 @@ export interface ContextChangeResponse {
    * to emit UI telemetry.
    */
   toolName?: string;
+  /**
+   * True when the call skipped a permission prompt via `AlwaysAllowedTools`.
+   */
+  autoApproved?: boolean;
 }
 
 interface SerializedSideEffectResponse extends Omit<SideEffectResponse, 'confirm'> {}
@@ -302,6 +307,10 @@ export interface ActionResponse extends ToolCallEvent {
    * `ai-v2-learn-skill` visual logging events.
    */
   loadedSkills?: string[];
+  /**
+   * True when the call skipped a permission prompt via `AlwaysAllowedTools`.
+   */
+  autoApproved?: boolean;
 }
 
 /**
@@ -1155,7 +1164,7 @@ export abstract class AiAgent<T> {
       request = this.buildRequest(outcome.functionResponses, Host.AidaClient.Role.ROLE_UNSPECIFIED);
     }
 
-    if (isStructuredLogEnabled()) {
+    if (isDebugMode()) {
       dispatchAiAssistanceDoneEvent();
     }
     return;
@@ -1178,6 +1187,8 @@ export abstract class AiAgent<T> {
           rpcId: Host.AidaClient.RpcGlobalId|undefined,
           ): AsyncGenerator<ResponseData, void, void> {
     if (!textResponse) {
+      debugLog('[AiAgent] Model returned an empty text response without tool calls:',
+               {step: stepIndex + 1, rpcId, functionCalls});
       yield this.#createErrorResponse(ErrorType.UNKNOWN);
       return;
     }
@@ -1285,6 +1296,7 @@ export abstract class AiAgent<T> {
             context: result.context,
             widgets: result.widgets,
             toolName: functionCall.name,
+            autoApproved: result.autoApproved,
           };
           return {type: 'contextChanged'};
         }
@@ -1351,7 +1363,12 @@ export abstract class AiAgent<T> {
         result: unknown,
         widgets?: AiWidget[],
         loadedSkills?: string[],
-      }|{error: string}|{context: ConversationContext<unknown>, description: string, widgets?: AiWidget[]}> {
+      }|{error: string}|{
+        context: ConversationContext<unknown>,
+        description: string,
+        widgets?: AiWidget[],
+        autoApproved?: boolean,
+      }> {
     const callId = crypto.randomUUID();
     const call = this.#functionDeclarations.get(name);
     if (!call) {
@@ -1398,14 +1415,43 @@ export abstract class AiAgent<T> {
       return Boolean(allowedOriginResult && 'blocked' in allowedOriginResult);
     };
 
+    const isAlwaysAllowed = call.permissionPrompt === PermissionPrompt.ALLOW_ONCE_OR_ALWAYS &&
+        Boolean(this.#alwaysAllowedTools?.isAllowed(name as ToolName));
+
     // Turns an error thrown by the handler into an error result, so the other
     // calls in the same model response still run and the history keeps their
-    // results.
+    // results. Races the handler against the abort signal so a hung tool call
+    // does not block the agent loop after the user aborts the run.
     const runHandler = async(handlerOptions?: FunctionHandlerOptions): Promise<ToolResult<unknown>> => {
+      const signal = handlerOptions?.signal;
+      if (signal?.aborted) {
+        return {error: 'Aborted'};
+      }
       try {
-        const isAlwaysAllowed = call.permissionPrompt === PermissionPrompt.ALLOW_ONCE_OR_ALWAYS &&
-            this.#alwaysAllowedTools?.isAllowed(name as ToolName);
-        return await call.handler(args, isAlwaysAllowed ? {...handlerOptions, approved: true} : handlerOptions);
+        const handlerPromise =
+            call.handler(args, isAlwaysAllowed ? {...handlerOptions, approved: true} : handlerOptions);
+        if (!signal) {
+          return await handlerPromise;
+        }
+        if (signal.aborted) {
+          return {error: 'Aborted'};
+        }
+        return await new Promise<ToolResult<unknown>>((resolve, reject) => {
+          const onAbort = (): void => {
+            resolve({error: 'Aborted'});
+          };
+          signal.addEventListener('abort', onAbort, {once: true});
+          handlerPromise.then(
+              value => {
+                signal.removeEventListener('abort', onAbort);
+                resolve(value);
+              },
+              err => {
+                signal.removeEventListener('abort', onAbort);
+                reject(err);
+              },
+          );
+        });
       } catch (err) {
         debugLog(`[AiAgent] Tool '${name}' threw:`, err);
         return {error: `Error: ${err instanceof Error ? err.message : String(err)}`};
@@ -1413,6 +1459,9 @@ export abstract class AiAgent<T> {
     };
 
     let result = await runHandler(options);
+    if (options?.signal?.aborted) {
+      return {error: 'Aborted'};
+    }
 
     // Check 1: After first handler execution.
     // Navigation could have occurred during the async handler execution.
@@ -1457,6 +1506,7 @@ export abstract class AiAgent<T> {
         javascriptCode,
         permissionPrompt: call.permissionPrompt,
         permissionTitle: call.permissionTitle,
+        toolName: name,
       };
 
       let decision = PermissionDecision.REJECT;
@@ -1494,6 +1544,9 @@ export abstract class AiAgent<T> {
         ...options,
         approved: true,
       });
+      if (options?.signal?.aborted) {
+        return {error: 'Aborted'};
+      }
 
       // Check 3: After second handler execution (approved run).
       // Navigation could have occurred during the async execution of the approved action.
@@ -1511,6 +1564,7 @@ export abstract class AiAgent<T> {
         widgets: result.widgets,
         canceled: false,
         toolName: name,
+        autoApproved: isAlwaysAllowed,
         ...(result.loadedSkills ? {loadedSkills: result.loadedSkills} : {}),
       };
     }
@@ -1529,7 +1583,10 @@ export abstract class AiAgent<T> {
     debugLog(`[AiAgent] Tool '${name}' result:`, result);
 
     if ('context' in result) {
-      return result;
+      return {
+        ...result,
+        autoApproved: isAlwaysAllowed,
+      };
     }
 
     return result as {result: unknown, widgets?: AiWidget[]};
@@ -1560,13 +1617,14 @@ export abstract class AiAgent<T> {
       };
     }
 
-    if (isStructuredLogEnabled() && aidaResponse) {
+    if (isDebugMode() && aidaResponse) {
       this.#structuredLog.push({
         request: structuredClone(request),
         aidaResponse,
       });
       try {
-        localStorage.setItem('aiAssistanceStructuredLog', JSON.stringify(this.#structuredLog));
+        Platform.HostRuntime.HOST_RUNTIME.getLocalStorage()?.setItem('aiAssistanceStructuredLog',
+                                                                     JSON.stringify(this.#structuredLog));
       } catch (err) {
         console.warn('Failed to write to local storage "aiAssistanceStructuredLog":', err);
       }

@@ -293,8 +293,9 @@ export class TickingFlameChart extends UI.Widget.VBox {
   readonly #view: TickingFlameChartView;
   readonly #boundOnScroll = this.onScroll.bind(this);
 
-  constructor(element?: HTMLElement, view: TickingFlameChartView = DEFAULT_VIEW) {
-    super(element);
+  constructor(elementOrOptions?: HTMLElement|UI.Widget.WidgetOptions, view: TickingFlameChartView = DEFAULT_VIEW) {
+    // @ts-expect-error
+    super(elementOrOptions);
     this.#view = view;
 
     // set to update once per second _while the tab is active_
@@ -375,9 +376,16 @@ export class TickingFlameChart extends UI.Widget.VBox {
     this.updateRender();
   }
 
+  readonly #onThemeChanged = (): void => {
+    this.dataProvider.updateGroupColors();
+    this.requestUpdate();
+  };
+
   override willHide(): void {
     super.willHide();
     this.isShown = false;
+    ThemeSupport.ThemeSupport.instance().removeEventListener(ThemeSupport.ThemeChangeEvent.eventName,
+                                                             this.#onThemeChanged);
     if (this.ticking) {
       this.stop();
     }
@@ -386,6 +394,9 @@ export class TickingFlameChart extends UI.Widget.VBox {
   override wasShown(): void {
     super.wasShown();
     this.isShown = true;
+    ThemeSupport.ThemeSupport.instance().addEventListener(ThemeSupport.ThemeChangeEvent.eventName,
+                                                          this.#onThemeChanged);
+    this.#onThemeChanged();
     if (this.#canTick && !this.ticking) {
       this.start();
     }
@@ -495,11 +506,18 @@ class TickingFlameChartDataProvider implements PerfUI.FlameChart.FlameChartDataP
         track: null,
       };
       this.#timelineData.groups.push(newGroup);
-      ThemeSupport.ThemeSupport.instance().addEventListener(ThemeSupport.ThemeChangeEvent.eventName, () => {
-        newGroup.style.color = getGroupDefaultTextColor();
-      });
     }
     this.maxLevel += depth;
+  }
+
+  updateGroupColors(): void {
+    if (!this.#timelineData.groups) {
+      return;
+    }
+    const color = getGroupDefaultTextColor();
+    for (const group of this.#timelineData.groups) {
+      group.style.color = color;
+    }
   }
 
   /**

@@ -114,8 +114,10 @@ export class Scope {
     }
     variable.uses.push(...defUses.uses);
     if (defUses.definitionKind === DefinitionKind.VAR) {
-      console.assert(variable.definitionKind !== DefinitionKind.LET);
-      if (variable.definitionKind === DefinitionKind.NONE) {
+      // A `var` declaration inside a `catch` block can redeclare the catch
+      // parameter; promote it to `VAR` so it hoists to the enclosing function or
+      // global scope.
+      if (variable.definitionKind === DefinitionKind.NONE || variable.definitionKind === DefinitionKind.LET) {
         variable.definitionKind = defUses.definitionKind;
       }
     } else {
@@ -275,7 +277,7 @@ export class ScopeVariableAnalysis {
             mappingLocationsForFunctionDeclaration(node, this.#sourceText));
         this.#addVariable('this', node.start, DefinitionKind.FIXED);
         this.#addVariable('arguments', node.start, DefinitionKind.FIXED);
-        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.LET, false));
+        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.VAR, false));
         // Process the body of the block statement directly to avoid creating new scope.
         node.body.body.forEach(this.#processNode.bind(this));
         this.#popScope(true);
@@ -288,7 +290,7 @@ export class ScopeVariableAnalysis {
         this.#methodName = undefined;
         this.#addVariable('this', node.start, DefinitionKind.FIXED);
         this.#addVariable('arguments', node.start, DefinitionKind.FIXED);
-        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.LET, false));
+        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.VAR, false));
         // Process the body of the block statement directly to avoid creating new scope.
         node.body.body.forEach(this.#processNode.bind(this));
         this.#popScope(true);

@@ -22,6 +22,9 @@ import {
   removeCustomAnchorsMovedListener,
   resolveCommentAnchor,
   resolveCommentAnchorElement,
+  setStickyOccluders,
+  STICKY_OCCLUDER_ATTRIBUTE,
+  type VisibleRect,
 } from './CommentAnchorResolver.js';
 
 export const COMMENT_MODE_CURSOR = 'var(--comment-cursor)';
@@ -394,7 +397,19 @@ export class CommentOverlayManager extends Common.ObjectWrapper.ObjectWrapper<Ev
    */
   #rematchAllComments(root: Document|Element = document): void {
     clearClippingAncestorsCache();
-    const jslogElements = deepQuerySelectorAll(root, '[jslog]');
+    // Single deep traversal shared by anchor rematching and sticky occluder clipping.
+    const scannedElements = deepQuerySelectorAll(root, `[jslog], [${STICKY_OCCLUDER_ATTRIBUTE}]`);
+    const jslogElements: Element[] = [];
+    const stickyOccluders: Element[] = [];
+    for (const el of scannedElements) {
+      if (el.hasAttribute('jslog')) {
+        jslogElements.push(el);
+      }
+      if (el.hasAttribute(STICKY_OCCLUDER_ATTRIBUTE)) {
+        stickyOccluders.push(el);
+      }
+    }
+    setStickyOccluders(stickyOccluders);
     const oldElements = new Set<Element>();
     const newElements = new Set<Element>();
 
@@ -440,6 +455,16 @@ export class CommentOverlayManager extends Common.ObjectWrapper.ObjectWrapper<Ev
     const elementPinCounts = new Map<Element, number>();
     const rectCache = new Map<Element, DOMRect>();
     const activeScrollRoots = new Set<ShadowRoot>();
+    const resolvedPins: Array<{id: string, el: Element, visibleRect: VisibleRect}> = [];
+    const createPin = (id: string, visibleRect: VisibleRect, offsetIndex: number,
+                       visible: boolean): PinPositionData => ({
+      id,
+      // Offset by 26px vertically (24px pin icon height + 2px spacing) so multiple comment pins on the same element stack vertically without overlapping.
+      // Offset by -12px (half of the 24px pin diameter) so the pin icon is centered on the top-right corner of the visible clipped area.
+      top: scrollY + visibleRect.top - 12 + offsetIndex * 26,
+      left: scrollX + visibleRect.right - 12,
+      visible,
+    });
 
     for (const thread of this.#commentManager.getCommentThreads()) {
       // Generated comments do not render overlay pins.
@@ -478,19 +503,6 @@ export class CommentOverlayManager extends Common.ObjectWrapper.ObjectWrapper<Ev
         continue;
       }
 
-      const offsetIndex = elementPinCounts.get(el) || 0;
-      elementPinCounts.set(el, offsetIndex + 1);
-      // Offset by 26px vertically (24px pin icon height + 2px spacing) so multiple comment pins on the same element stack vertically without overlapping.
-      const offsetY = offsetIndex * 26;
-
-      // Offset by -12px (half of the 24px pin diameter) so the pin icon is centered on the top-right corner of the visible clipped area.
-      newPins.push({
-        id: thread.id,
-        top: scrollY + visibleRect.top - 12 + offsetY,
-        left: scrollX + visibleRect.right - 12,
-        visible: true,
-      });
-
       newHighlights.push({
         id: thread.id,
         top: scrollY + visibleRect.top,
@@ -499,6 +511,22 @@ export class CommentOverlayManager extends Common.ObjectWrapper.ObjectWrapper<Ev
         height: visibleRect.height,
         visible: true,
       });
+
+      if (thread.status === 'RESOLVED') {
+        resolvedPins.push({id: thread.id, el, visibleRect});
+        continue;
+      }
+
+      const offsetIndex = elementPinCounts.get(el) || 0;
+      elementPinCounts.set(el, offsetIndex + 1);
+      newPins.push(createPin(thread.id, visibleRect, offsetIndex, true));
+    }
+
+    // Pins of RESOLVED threads are hidden; the UI shows the pin of the open
+    // thread. They all share the slot below the other pins of their element,
+    // so they never shift the other pins, and only one is open at a time.
+    for (const {id, el, visibleRect} of resolvedPins) {
+      newPins.push(createPin(id, visibleRect, elementPinCounts.get(el) || 0, false));
     }
 
     if (this.#scrollListener) {
@@ -559,7 +587,7 @@ export class CommentOverlayManager extends Common.ObjectWrapper.ObjectWrapper<Ev
    */
   stop(): void {
     document.body.style.cursor = '';
-    clearClippingAncestorsCache();
+    setStickyOccluders(null);
     this.clearDraftThreads();
     this.#removeClickListener();
     this.#removeScrollListener();
@@ -870,6 +898,7 @@ export class CommentOverlayManager extends Common.ObjectWrapper.ObjectWrapper<Ev
         'data-target-id',
         'aria-expanded',
         'data-file-path',
+        STICKY_OCCLUDER_ATTRIBUTE,
       ],
     });
   }

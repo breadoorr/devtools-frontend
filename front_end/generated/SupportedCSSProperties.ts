@@ -4214,9 +4214,9 @@ export const generatedProperties: CSSProperty[] = [
    "thin"
   ],
   "longhands": [
-   "outline-color",
+   "outline-width",
    "outline-style",
-   "outline-width"
+   "outline-color"
   ],
   "name": "outline"
  },
@@ -4732,6 +4732,9 @@ export const generatedProperties: CSSProperty[] = [
    "grid-rows",
    "grid-columns",
    "grid-order",
+   "grid-lanes-flow",
+   "grid-lanes-track",
+   "grid-lanes-order",
    "source-order"
   ],
   "name": "reading-flow"
@@ -8587,6 +8590,9 @@ export const generatedPropertyValues: Record<string, CSSPropertyValue> = {
    "grid-rows",
    "grid-columns",
    "grid-order",
+   "grid-lanes-flow",
+   "grid-lanes-track",
+   "grid-lanes-order",
    "source-order"
   ]
  },

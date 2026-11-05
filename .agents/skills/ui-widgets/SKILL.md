@@ -21,9 +21,9 @@ Adhere strictly to the Model-View-Presenter (MVP) architecture.
 * Constructor MUST call `super()`. If taking `element?: HTMLElement`, pass it to `super(element)`. `super(true)` is forbidden. Do not pass `classes` or `jslog` in `WidgetOptions` (`super(..., {classes: [...], jslog: ...})`); instead, pass container CSS classes and `jslog` via the third parameter of `render(template, target, {container: {classes: [...], attributes: {jslog: ...}}})` in the view function (and if the widget uses shadow DOM, pass `useShadowDom: 'pure'` and extend `Widget<ShadowRoot>` / `VBox<ShadowRoot>` with `target: HTMLElement|DocumentFragment` so `render()` applies `container.classes` and `container.attributes` to the shadow host `this.element`).
 * Dependencies from `Universe` SHOULD be requested via static `INJECT`: `static override readonly INJECT = [...] as const;` and received as constructor parameter #2 (`[dep1, dep2]: UI.Widget.WidgetDependencies<typeof MyWidget>`).
 * Styling MUST be handled within the View. `this.registerCSSFiles()` is forbidden.
-* Initial render MUST be triggered in `override wasShown(): void` by calling `this.requestUpdate()`.
+* Initial render MUST be triggered in `override wasShown(): void` by calling `this.requestUpdate()`. External model, workspace, and setting subscriptions SHOULD be attached in `wasShown()` and detached symmetrically in `willHide()`, reconciling incremental state changes that occurred while hidden rather than unconditionally calling `reset()` and wiping populated presenter state (such as open tree folders or selection) on every re-show.
 * MUST hold all UI state as private class fields (e.g., `#counter`).
-* To schedule a UI update, MUST call `this.requestUpdate()`. `performUpdate()` MUST NOT be called directly.
+* To schedule a UI update, MUST call `this.requestUpdate()` asynchronously across all presenter methods, property setters, and event handlers. `performUpdate()` MUST NOT be called directly (except in `UI.Panel`/`UI.Dialog` subclasses where `requestUpdate()` is unavailable or when synchronous layout measurement is documented as strictly required). Presenter and presenter-node classes MUST NOT expose imperative view-refresh methods (e.g., `updateTrailingIcons()`, `updateIcon()`); all visual output should be derived declaratively in the view function.
 
 ### View (`function`) Rules
 
@@ -119,6 +119,22 @@ render(html`
 *   **Raw Elements:** Use `Directives.ref` (from `ui/lit/lit.js`) to obtain a reference to a raw `HTMLElement` if needed for imperative APIs (e.g., `splitWidget.installResizer(element)`).
 *   **Child Widgets:** Use `UI.Widget.widgetRef` to obtain the class instance of a child widget inside the view function if you need to call imperative methods on it. **Do NOT store child widget instances on `ViewOutput` as a final result** (doing so is only acceptable temporarily in intermediate migration CLs). Instead, either supply all needed configuration declaratively through setters/inputs on the child widget, or if imperative calls are strictly necessary, expose narrow action functions on `ViewOutput` (e.g., `output.doLayout = () => splitWidget.doLayout()`, `output.revealPosition = pos => childWidget.revealPosition(pos)`). Do not keep `get*ForTest()` methods that return child widget instances via `ViewOutput`; tests should query rendered `<devtools-widget>` elements via `.getWidget()` or assert on `ViewInput` via `createViewFunctionStub`.
 
+### Visibility (`?hidden` Attribute Only)
+Toggle element visibility declaratively using the HTML `?hidden` attribute:
+```ts
+html`<div ?hidden=${!input.isVisible}>...</div>`
+```
+Never combine a `.hidden` CSS class (`classMap({hidden: ...})` or `classList.toggle('hidden', ...)`) with `?hidden` (`inspectorCommon.css` already defines `[hidden] { display: none !important; }`).
+
+### Declarative Default Focus (`autofocus` / `?autofocus`)
+`UI.Widget.prototype.focus()` natively queries `[autofocus]` via `getDefaultFocusedElement()` across both plain HTML elements (e.g. `<devtools-tree autofocus>`) and child widgets. Mark the default focus target with `autofocus` or `?autofocus=${...}` (ensuring at most one element has `autofocus` in any render state) instead of overriding `focus()`, calling `this.setDefaultFocusedElement(...)`, or plumbing focus closures through `ViewOutput`.
+
+### `<devtools-tree>` & Editable `<devtools-prompt ?editing>` Rows
+*   Keep `<devtools-tree>` (`ui/kit/kit.js`) contracts intact without widening `front_end/ui/legacy/Treeoutline.ts` (`TreeViewElement`/`TreeViewTreeElement`). Drive selection and expansion purely via `?selected`, `?open`, `@select`, and `@expand`.
+*   Keep `<devtools-prompt ?editing>` persistently mounted in the DOM and toggle `?editing` declaratively; do not duplicate `aria-label` on inner prompts when the `<li role="treeitem">` already labels the row.
+*   **Child widget isolation for editable tree rows:** Because `<devtools-tree>` clones light DOM into shadow DOM and re-clones an `<li role="treeitem">` whenever any descendant attribute mutates, place editable prompts inside a small child `UI.Widget` (`${widget(RowPromptWidget, {...})}`) so toggling `?editing` updates the child widget in place without triggering a tree re-clone and blurring the active input.
+*   Custom elements inside `<devtools-tree>` templates whose state is passed via JS properties (`.data`) must override `cloneNode(deep)` to copy `.data` and reflect dynamic state via DOM attributes so shadow clones update reliably.
+
 ### Dependencies
 
 * **View Dependencies:** The `DEFAULT_VIEW` is typically a module-level function. Ensure all dependencies (enums, constants, other components) are imported at the top of the file so they are available in the function scope.
@@ -163,12 +179,10 @@ Example: `front_end/panels/my_example/MyExampleWidget.ts`.
 ```ts
 // front_end/panels/my_example/MyExampleWidget.ts
 
-import {Directives, html, render} from '../../ui/lit/lit.js';
+import {html, render} from '../../ui/lit/lit.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
 import myExampleWidgetStyles from './myExampleWidget.css.js';
-
-const {ref} = Directives;
 
 // 1. Define Input data shape. (Assuming Child Widget configuration for completeness)
 export interface ViewInput {
@@ -177,33 +191,24 @@ export interface ViewInput {
   onButtonClick: () => void;
 }
 
-// 2. Define Output imperative API shape.
-export interface ViewOutput {
-  focusButton?: () => void;
-}
-
-// 3. Define the View function.
+// 2. Define the View function (output is undefined when no imperative actions exist).
 // clang-format off
-const DEFAULT_VIEW = (input: ViewInput, output: ViewOutput, target: HTMLElement): void => {
+const DEFAULT_VIEW = (input: ViewInput, _output: undefined, target: HTMLElement): void => {
   render(html`
     <style>${myExampleWidgetStyles}</style>
     <div class="child-widget">
       <h3>${input.title}</h3>
       <p>Counter: ${input.counter}</p>
-      <button @click=${input.onButtonClick} ${ref(el => {
-        if (el) {
-          output.focusButton = () => el.focus();
-        }
-      })}>Increment</button>
+      <button autofocus @click=${input.onButtonClick}>Increment</button>
     </div>
   `, target);
 };
 // clang-format on
 
-// 4. Type alias for the view.
+// 3. Type alias for the view.
 type View = typeof DEFAULT_VIEW;
 
-// 5. Define the Presenter.
+// 4. Define the Presenter.
 export class MyExampleWidget extends UI.Widget.Widget {
   #counter: number = 0;
 
@@ -211,7 +216,6 @@ export class MyExampleWidget extends UI.Widget.Widget {
   title: string = 'Default Title';
 
   #view: View;
-  #viewOutput: ViewOutput = {};
 
   constructor(element?: HTMLElement, view: View = DEFAULT_VIEW) {
     super(element);
@@ -222,10 +226,6 @@ export class MyExampleWidget extends UI.Widget.Widget {
     super.wasShown();
     // Initial render trigger.
     this.requestUpdate();
-  }
-
-  focus(): void {
-    this.#viewOutput.focusButton?.();
   }
 
   #handleButtonClick = (): void => {
@@ -239,7 +239,7 @@ export class MyExampleWidget extends UI.Widget.Widget {
       counter: this.#counter,
       onButtonClick: this.#handleButtonClick,
     };
-    this.#view(viewInput, this.#viewOutput, this.contentElement);
+    this.#view(viewInput, undefined, this.contentElement);
   }
 }
 ```

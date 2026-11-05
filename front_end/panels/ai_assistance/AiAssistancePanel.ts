@@ -480,6 +480,7 @@ function defaultView(input: ViewInput, output: PanelViewOutput, target: HTMLElem
   }
 
   Lit.render(html`
+    <style>${aiAssistancePanelStyles}</style>
     ${toolbarView(input)}
     <div class="ai-assistance-view-container">
       <devtools-split-view
@@ -638,7 +639,6 @@ export class AiAssistancePanel extends UI.Panel.Panel {
   }) {
     super(AiAssistancePanel.panelName);
     this.view = view;
-    this.registerRequiredCSS(aiAssistancePanelStyles);
     this.#aiAssistanceEnabledSetting = this.#getAiAssistanceEnabledSetting();
 
     this.#aidaClient = aidaClient;
@@ -916,14 +916,20 @@ export class AiAssistancePanel extends UI.Panel.Panel {
   }
 
   async #handlePerformanceRecordAndReload(): Promise<Trace.TraceModel.ParsedTrace> {
-    return await TimelinePanel.TimelinePanel.TimelinePanel.executeRecordAndReload();
+    return await TimelinePanel.TimelinePanel.TimelinePanel.executeRecordAndReload({
+      signal: this.#runAbortController.signal,
+    });
   }
 
   async #handleLighthouseRun(overrides?: LHModel.RunTypes.RunOverrides): Promise<LHModel.RunTypes.RunResult> {
-    return await LighthousePanel.LighthousePanel.LighthousePanel.executeLighthouseRecording({
-      isAIControlled: true,
-      ...overrides,
-    });
+    return await LighthousePanel.LighthousePanel.LighthousePanel.executeLighthouseRecording(
+        {
+          isAIControlled: true,
+          ...overrides,
+        },
+        {
+          signal: this.#runAbortController.signal,
+        });
   }
 
   #getDefaultConversationType(): AiAssistanceModel.AiHistoryStorage.ConversationType|undefined {
@@ -1117,6 +1123,9 @@ export class AiAssistancePanel extends UI.Panel.Panel {
         TimelinePanel.TimelinePanel.TimelinePanel, this.#bindTimelineTraceListener, this);
     this.#bindTimelineTraceListener();
     this.#selectDefaultAgentIfNeeded();
+    if (AiAssistanceModel.AiUtils.isNaturalLanguageInterfaceEnabled()) {
+      void VisualLogging.logFunctionCall('ai-allowed-tools-count', String(this.#alwaysAllowedTools.list().length));
+    }
 
     Host.userMetrics.actionTaken(Host.UserMetrics.Action.AiAssistancePanelOpened);
   }
@@ -1853,6 +1862,9 @@ export class AiAssistancePanel extends UI.Panel.Panel {
       let announcedAnswerLoading = false;
       let announcedAnswerReady = false;
       for await (const data of items) {
+        const toolNameForLogging = 'toolName' in data && data.toolName !== undefined ?
+            Platform.StringUtilities.toKebabCase(data.toolName) :
+            undefined;
         switch (data.type) {
           case AiAssistanceModel.AiAgent.ResponseType.USER_QUERY: {
             this.#messages.push({
@@ -1886,6 +1898,19 @@ export class AiAssistancePanel extends UI.Panel.Panel {
             break;
           }
           case AiAssistanceModel.AiAgent.ResponseType.CONTEXT: {
+            // Supersede stale context widgets of the same type (such as an older Lighthouse report)
+            // within the current turn. Filter by widget name rather than clearing all widgets so
+            // cross-domain context changes (such as starting on a performance trace and running
+            // Lighthouse) preserve the earlier context's widgets.
+            if (data.widgets?.length) {
+              const newWidgetNames = new Set(data.widgets.map(widget => widget.name));
+              for (const part of systemMessage.parts) {
+                if (part.type === 'step' && part.step.contextDetails && part.step.widgets) {
+                  const remainingWidgets = part.step.widgets.filter(widget => !newWidgetNames.has(widget.name));
+                  part.step.widgets = remainingWidgets.length > 0 ? remainingWidgets : undefined;
+                }
+              }
+            }
             step.title = lockedString(UIStringsNotTranslate.analyzingData);
             step.contextDetails = data.details;
             step.widgets = data.widgets;
@@ -1935,6 +1960,20 @@ export class AiAssistancePanel extends UI.Panel.Panel {
                       performance.now() - promptShownAt < PERMISSION_PROMPT_INPUT_PROTECTION_MS) {
                     return;
                   }
+                  if (AiAssistanceModel.AiUtils.isNaturalLanguageInterfaceEnabled() &&
+                      !this.#conversation?.isReadOnly) {
+                    switch (decision) {
+                      case AiAssistanceModel.Tool.PermissionDecision.REJECT:
+                        void VisualLogging.logFunctionCall('ai-permission-rejected', toolNameForLogging);
+                        break;
+                      case AiAssistanceModel.Tool.PermissionDecision.ALLOW_ONCE:
+                        void VisualLogging.logFunctionCall('ai-permission-allowed-once', toolNameForLogging);
+                        break;
+                      case AiAssistanceModel.Tool.PermissionDecision.ALLOW_ALWAYS:
+                        void VisualLogging.logFunctionCall('ai-permission-allowed-always', toolNameForLogging);
+                        break;
+                    }
+                  }
                   data.confirm(decision);
                   approvalStep.state = {type: 'completed'};
                   this.requestUpdate();
@@ -1942,6 +1981,9 @@ export class AiAssistancePanel extends UI.Panel.Panel {
               },
             };
             commitStep();
+            if (AiAssistanceModel.AiUtils.isNaturalLanguageInterfaceEnabled() && !this.#conversation?.isReadOnly) {
+              void VisualLogging.logFunctionCall('ai-permission-prompt-shown', toolNameForLogging);
+            }
             break;
           }
           case AiAssistanceModel.AiAgent.ResponseType.ACTION: {
@@ -1951,14 +1993,18 @@ export class AiAssistancePanel extends UI.Panel.Panel {
             step.output ??= data.output;
             step.widgets ??= data.widgets;
             commitStep();
-            if (AiAssistanceModel.AiUtils.isAiV2Enabled() && !this.#conversation?.isReadOnly) {
-              if (data.toolName === 'learnSkills') {
-                for (const skill of data.loadedSkills ?? []) {
-                  void VisualLogging.logFunctionCall('ai-v2-learn-skill', skill);
+            if (!this.#conversation?.isReadOnly) {
+              if (AiAssistanceModel.AiUtils.isAiV2Enabled()) {
+                if (data.toolName === 'learnSkills') {
+                  for (const skill of data.loadedSkills ?? []) {
+                    void VisualLogging.logFunctionCall('ai-v2-learn-skill', skill);
+                  }
+                } else if (toolNameForLogging) {
+                  void VisualLogging.logFunctionCall('ai-v2-tool-call', toolNameForLogging);
                 }
-              } else if (data.toolName) {
-                void VisualLogging.logFunctionCall('ai-v2-tool-call',
-                                                   Platform.StringUtilities.toKebabCase(data.toolName));
+              }
+              if (AiAssistanceModel.AiUtils.isNaturalLanguageInterfaceEnabled() && data.autoApproved) {
+                void VisualLogging.logFunctionCall('ai-permission-auto-allowed', toolNameForLogging);
               }
             }
             break;
@@ -2030,9 +2076,13 @@ export class AiAssistancePanel extends UI.Panel.Panel {
           }
 
           case AiAssistanceModel.AiAgent.ResponseType.CONTEXT_CHANGE: {
-            if (AiAssistanceModel.AiUtils.isAiV2Enabled() && !this.#conversation?.isReadOnly && data.toolName) {
-              void VisualLogging.logFunctionCall('ai-v2-tool-call',
-                                                 Platform.StringUtilities.toKebabCase(data.toolName));
+            if (!this.#conversation?.isReadOnly) {
+              if (AiAssistanceModel.AiUtils.isAiV2Enabled() && toolNameForLogging) {
+                void VisualLogging.logFunctionCall('ai-v2-tool-call', toolNameForLogging);
+              }
+              if (AiAssistanceModel.AiUtils.isNaturalLanguageInterfaceEnabled() && data.autoApproved) {
+                void VisualLogging.logFunctionCall('ai-permission-auto-allowed', toolNameForLogging);
+              }
             }
             this.#handleConversationContextChange(data.context);
             step.state = {type: 'completed'};

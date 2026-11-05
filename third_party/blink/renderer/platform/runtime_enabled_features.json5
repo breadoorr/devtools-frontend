@@ -316,13 +316,6 @@
       status: "experimental",
       implied_by: ["CorsRFC1918"],
     },
-    {
-      // Interest Group JS API/runtimeflag.
-      name: "AdInterestGroupAPI",
-      origin_trial_feature_name: "AdInterestGroupAPI",
-      implied_by: ["Fledge", "Parakeet"],
-      public: true,
-    },
     // Adjust the end of the next paragraph if the end position for the
     // paragraph is updated while moving the paragraph. See
     // https://crbug.com/329121649
@@ -645,6 +638,12 @@
       // positioning adjustments to occur even in cases where there is no
       // scrollable overflow.
       name: "AnchorPositionAdjustmentWithoutOverflow",
+      status: "stable",
+    },
+    {
+      // https://crbug.com/543008837: Ensure anchor-positioned elements are
+      // consistent with a full relayout once scrolling stops.
+      name: "AnchorPositionRelayoutOnScrollEnd",
       status: "stable",
     },
     {
@@ -1673,8 +1672,9 @@
       // https://drafts.csswg.org/css-values-4/ Appendix A
       // https://drafts.csswg.org/css-backgrounds/#layering
       // https://github.com/w3c/csswg-drafts/issues/7164
+      // Ship in M159, should be removed in M161.
       name: "CSSBackgroundLayerCountIndependence",
-      status: "experimental",
+      status: "stable",
     },
     {
       name: "CSSBorderRadiusSideShorthands",
@@ -2264,6 +2264,14 @@
       status: "experimental",
     },
     {
+      // Enable Unicode uppercasing to Mtavruli. Disable to restore the legacy
+      // mapping if font regressions are reported in the field.
+      // TODO(crbug.com/40127672): Remove this kill switch and the legacy mapping
+      // two milestones after the Stable launch, if rollback is no longer needed.
+      name: "CSSTextTransformGeorgianUppercase",
+      status: "stable",
+    },
+    {
       // crbug.com/41297237: Support multi-keyword values in CSS `text-transform`.
       name: "CSSTextTransformMultiKeyword",
       depends_on: ["CSSTextTransformFullWidth", "CSSTextTransformFullSizeKana"],
@@ -2365,6 +2373,11 @@
     {
       // https://chromestatus.com/feature/5134293578285056
       name: "Database",
+    },
+    {
+      // Killswitch for https://crbug.com/40622827
+      name: "DateTimeFieldTypeWithoutSelection",
+      status: "stable",
     },
     {
       // https://crbug.com/473454959
@@ -2891,10 +2904,6 @@
       name: "EndpointInclusiveCommitStyles",
       status: "stable",
     },
-    {
-      name: "EnforceAnonymityExposure",
-      status: "stable",
-    },
     // When enabled, the LCP algorithm ignores image entropy for the first
     // video frame. See crbug.com/434659232.
     {
@@ -2932,6 +2941,11 @@
       // https://drafts.csswg.org/web-animations-2/#triggers
       name: "EventTrigger",
       status: "experimental",
+    },
+    {
+      // https://crbug.com/578672563
+      name: "ExclusionSpaceCopyOnWrite",
+      status: "stable",
     },
     {
       name: "ExperimentalContentSecurityPolicyFeatures",
@@ -3121,6 +3135,13 @@
       // https://chromestatus.com/feature/5239268180754432
       name: "FetchBodyBytes",
       status: "stable",
+    },
+    {
+      // Makes fetch() fail with a network error when a redirect response has
+      // an empty Location header, in "follow" and "error" redirect modes.
+      // https://crbug.com/810288
+      name: "FetchEmptyLocationRedirectIsNetworkError",
+      status: "experimental",
     },
     {
       // The Blink runtime-enabled feature name for the API's IDL.
@@ -3321,95 +3342,6 @@
     // OOPIFs.
     {
       name: "FixVisualRectRemoteViewportTransform",
-      status: "stable",
-    },
-    {
-      name: "Fledge",
-      public: true,
-    },
-    {
-      // Enables deal support within auctions.
-      name: "FledgeAuctionDealSupport",
-      status: "test",
-    },
-    {
-      name: "FledgeBiddingAndAuctionServerAPI",
-      origin_trial_feature_name: "FledgeBiddingAndAuctionServer",
-      origin_trial_allows_third_party: true,
-      base_feature: "none",
-      status: "stable",
-    },
-    {
-      name: "FledgeBiddingAndAuctionServerAPIMultiSeller",
-      status: "stable",
-    },
-    {
-      name: "FledgeClickiness",
-      status: "test",
-    },
-    {
-      name: "FledgeCustomMaxAuctionAdComponents",
-      status: "stable",
-    },
-    {
-      // Enables using a 'deprecatedRenderURLReplacements' field within the
-      // Protected Audience ad auction config.
-      name: "FledgeDeprecatedRenderURLReplacements",
-      public: true,
-      status: "stable",
-    },
-    {
-      name: "FledgeDirectFromSellerSignalsHeaderAdSlot",
-      status: "stable",
-    },
-    {
-      // Feature flag to control removal, in case we run into unexpected
-      // breakage.
-      //
-      // TODO(crbug.com/384481095): Remove in a few milestones, along with the
-      // implementation code.
-      name: "FledgeDirectFromSellerSignalsWebBundles",
-    },
-    {
-      name: "FledgeMultiBid",
-      public: true,
-      status: "stable",
-    },
-    {
-      // Enables the private model training API in Protected Audience.
-      // https://github.com/WICG/turtledove/blob/main/PA_private_model_training.md
-      name: "FledgePrivateModelTraining",
-      status: "test",
-    },
-    {
-      // Enables real time reporting API in Protected Audience.
-      // https://github.com/WICG/turtledove/blob/main/PA_real_time_monitoring.md
-      name: "FledgeRealTimeReporting",
-      public: true,
-      status: "stable",
-    },
-    {
-      // Enables the ability to set seller nonces on the header response and
-      // use bidNonce in bids.
-      name: "FledgeSellerNonce",
-      status: "stable",
-    },
-    {
-      // Enables having `executionMode` in the auctionConfig to use for seller scripts.
-      name: "FledgeSellerScriptExecutionMode",
-      status: "test",
-    },
-    {
-      name: "FledgeTrustedSignalsKVv1CreativeScanning",
-      status: "test",
-    },
-    {
-      name: "FledgeTrustedSignalsKVv2ContextualData",
-      depends_on: ["FledgeTrustedSignalsKVv2Support"],
-      status: "test",
-    },
-    {
-      name: "FledgeTrustedSignalsKVv2Support",
       status: "stable",
     },
     {
@@ -3790,12 +3722,6 @@
       status: "stable",
     },
     {
-      // Kill switch for making <area> display:none by default according to the
-      // HTML rendering specification. https://crbug.com/1231263
-      name: "HTMLAreaElementDisplayNone",
-      status: "stable",
-    },
-    {
       name: "HTMLAreaHreflangType",
       status: "test",
     },
@@ -3906,7 +3832,7 @@
     },
     {
       name: "ICUCapitalization",
-      status: "experimental",
+      status: "stable",
     },
     {
       name: "IgnoreLetterSpacingInCursiveScripts",
@@ -3983,6 +3909,11 @@
     {
       // See crbug.com/40910996 crbug.com/569803503
       name: "InlineContainingBlockSkipOpaque",
+      status: "stable",
+    },
+    {
+      // crbug.com/576888320
+      name: "InlineCursorMoveToEarlierFragmentainer",
       status: "stable",
     },
     {
@@ -4128,6 +4059,11 @@
       base_feature: "none",
     },
     {
+      // Skips keyboard activation when focus is on a descendant. Shipped in M158.
+      name: "KeyboardActivationFocusCheck",
+      status: "stable",
+    },
+    {
       // Checks interactive content using EventPath captured at
       // dispatch start instead of current DOM state. This was
       // added in M145 and can be removed after M147.
@@ -4155,14 +4091,6 @@
     {
       name: "LanguageDetectionAPIForWorkers",
       public: true,
-    },
-    {
-      name: "LayoutCloneForScrollableOverflowChange",
-      status: "stable",
-    },
-    {
-      name: "LayoutContainingBlockReturnsBox",
-      status: "stable",
     },
     {
       name: "LayoutIgnoreMarginsForSticky",
@@ -4219,6 +4147,13 @@
       // bugs for touch inputs.
       // https://issues.chromium.org/issues/408010435
       name: "LightDismissFromClick",
+      status: "stable",
+    },
+    {
+      // Kill switch for crbug.com/424995036 and crbug.com/577276073. When
+      // enabled, the top of a PopupWidgetHost is constrained to be at or below
+      // the line of death.
+      name: "LimitPopupWidgetHostPosition",
       status: "stable",
     },
     {
@@ -4387,7 +4322,7 @@
     {
       // Enables MathMLAnchorElement
       name: "MathMLAnchorElement",
-      status: "test",
+      status: "experimental",
     },
     {
       // Enables mirroring for stretchy and large MathML operators when
@@ -4591,7 +4526,7 @@
     // Optimization for monospace text.
     {
       name: "MonospaceGlyphCompaction",
-      status: "test",
+      status: "stable",
     },
     // Move the selection to the last position in the list item. See
     // https://crbug.com/331841851
@@ -5065,11 +5000,6 @@
       settable_from_internals: true,
     },
     {
-      // PARAKEET ad serving runtime flag/JS API.
-      name: "Parakeet",
-      origin_trial_feature_name: "Parakeet",
-    },
-    {
       name: "PartitionVisitedLinkDatabaseWithSelfLinks",
       status: {"iOS": "", "default": "stable"},
     },
@@ -5285,10 +5215,6 @@
       status: "stable",
     },
     {
-      name: "PrePaintBoxInvalidatorUsesFragments",
-      status: "stable",
-    },
-    {
       // Used to allow chrome://flags to turn off prerendering. (Without using
       // the user-facing preloading settings page to turn off other
       // preloading.) See https://crbug.com/1494471.
@@ -5490,12 +5416,6 @@
       // Shipping in M148, revised in M151, so should be removed around M153.
       name: "RecheckParentDuringNodeVectorInsertion",
       status: "stable",
-    },
-    // If enabled, both Accept-Language HTTP header and JavaScript getter will
-    // be reduced.
-    {
-      name: "ReduceAcceptLanguage",
-      base_feature: "none",
     },
     // If enabled, the minor version of the User-Agent string will be reduced.
     // This User-Agent Reduction feature has been enabled starting from M101,
@@ -5971,6 +5891,12 @@
       origin_trial_allows_third_party: true,
       status: "stable",
       base_feature: "none",
+    },
+    {
+      // Scopes SelectAll to the active editing host if it has focus but lacks
+      // an active text selection range. Shipped in M158, safe to remove in M162.
+      name: "SelectAllInFocusedEditingHost",
+      status: "stable",
     },
     {
       // Make select popup anchor stay within web contents to prevent
@@ -6457,8 +6383,9 @@
       // Splits a qualified name on its first colon, per the DOM "validate and
       // extract" algorithm, so any later colons are part of the local name.
       // See https://crbug.com/490251709
+      // Enabled in M159, safe to remove in M163.
       name: "SplitQualifiedNameOnFirstColon",
-      status: "experimental",
+      status: "stable",
     },
     {
       name: "SplitTextNotCleanupDummySpans",
@@ -7832,8 +7759,8 @@
     },
     {
       name: "WebTransportCongestionControl",
-      status: "experimental",
-      base_feature: "none",
+      status: "stable",
+      base_feature: "WebTransportCongestionControlAPI",
     },
     {
       name: "WebTransportCreateStreamsBeforeReady",
