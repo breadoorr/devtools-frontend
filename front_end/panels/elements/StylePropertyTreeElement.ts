@@ -3076,7 +3076,7 @@ export class StylePropertyTreeElement extends UI.TreeOutline.TreeElement {
     const button = OpenInIDE.createOpenInIDEButton(
         this.#parentSection, {property: this.property, propertyPart: 'name'});
     if (button) {
-      this.nameElement?.prepend(button);
+      this.listItemElement.appendChild(button);
     }
   }
 

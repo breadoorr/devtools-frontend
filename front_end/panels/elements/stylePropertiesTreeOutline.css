@@ -125,16 +125,16 @@
   }
 }
 
-.tree-outline li > .webkit-css-property > .open-in-ide-button {
-  margin-inline-end: 2px;
+.tree-outline li > .open-in-ide-button {
+  margin-inline-start: 2px;
   vertical-align: top;
   opacity: 0%;
   pointer-events: none;
 }
 
-.tree-outline li:hover > .webkit-css-property > .open-in-ide-button,
-.tree-outline li:focus-within > .webkit-css-property > .open-in-ide-button,
-.tree-outline li > .webkit-css-property > .open-in-ide-button:focus-visible {
+.tree-outline li:hover > .open-in-ide-button,
+.tree-outline li:focus-within > .open-in-ide-button,
+.tree-outline li > .open-in-ide-button:focus-visible {
   opacity: 100%;
   pointer-events: auto;
 }
